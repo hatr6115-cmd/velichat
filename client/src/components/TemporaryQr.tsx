@@ -7,10 +7,11 @@ import { toast } from "sonner";
 type TemporaryQrProps = {
   inviteUrl: string;
   onScan?: () => void;
+  onClose?: () => void;
   inline?: boolean;
 };
 
-export default function TemporaryQr({ inviteUrl, onScan, inline = false }: TemporaryQrProps) {
+export default function TemporaryQr({ inviteUrl, onScan, onClose, inline = false }: TemporaryQrProps) {
   const [dataUrl, setDataUrl] = useState("");
   const [copied, setCopied] = useState(false);
 
@@ -112,6 +113,15 @@ export default function TemporaryQr({ inviteUrl, onScan, inline = false }: Tempo
         >
           <Download size={14} /> Save QR Image
         </Button>
+        {onClose && (
+          <Button
+            type="button"
+            onClick={onClose}
+            className="col-span-2 mt-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs h-10 font-semibold gap-1.5 border border-slate-700/80"
+          >
+            ← Back to Chat
+          </Button>
+        )}
       </div>
     </div>
   );

@@ -180,6 +180,28 @@ export default function Home() {
     }
   }, [room?.messages?.length, room?.media?.length, room?.typingAlias]);
 
+  // When guest connects, automatically dismiss QR modal and alert host
+  useEffect(() => {
+    if (room?.participantCount === 2 && isQrModalOpen) {
+      setIsQrModalOpen(false);
+      toast.success("Guest joined! Chat is ready.");
+    }
+  }, [room?.participantCount, isQrModalOpen]);
+
+  // Dismiss modals on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (isQrModalOpen) setIsQrModalOpen(false);
+        if (isEndModalOpen) setIsEndModalOpen(false);
+        if (activePhoto) setActivePhoto(null);
+        if (isScannerOpen) setIsScannerOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isQrModalOpen, isEndModalOpen, activePhoto, isScannerOpen]);
+
   // Read receipts tracking via IntersectionObserver
   useEffect(() => {
     if (!session || !room) return;
@@ -946,15 +968,26 @@ export default function Home() {
         )}
 
         {isQrModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setIsQrModalOpen(false);
+            }}
+          >
             <div className="relative w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl">
               <button
+                type="button"
                 onClick={() => setIsQrModalOpen(false)}
-                className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-800"
+                className="absolute top-4 right-4 z-10 p-2 rounded-full text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-800 transition-colors"
+                aria-label="Back to chat"
               >
                 <X size={18} />
               </button>
-              <TemporaryQr inviteUrl={inviteUrl} />
+              <TemporaryQr
+                inviteUrl={inviteUrl}
+                inline={true}
+                onClose={() => setIsQrModalOpen(false)}
+              />
             </div>
           </div>
         )}
