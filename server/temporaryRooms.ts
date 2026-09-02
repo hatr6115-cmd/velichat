@@ -18,8 +18,8 @@ export type TemporaryMessage = {
   alias: TemporaryAlias;
   body: string;
   sentAt: number;
-  deliveredBy?: string;
-  readBy?: string;
+  deliveredTo: string[];
+  readBy: string[];
 };
 
 type TemporaryMedia = {
@@ -27,9 +27,9 @@ type TemporaryMedia = {
   memberId: string;
   alias: TemporaryAlias;
   kind: "voice" | "photo";
-  dataUrl: string;
+  dataUrl?: string; // made optional so we can delete it when everyone consumed
   sentAt: number;
-  consumedBy?: string;
+  consumedBy: string[];
 };
 
 export type TemporaryMediaSnapshot = Omit<TemporaryMedia, "dataUrl"> & { dataUrl?: string };
@@ -39,22 +39,21 @@ type Room = {
   inviteToken: string;
   expiresAt: number;
   host: Participant;
-  guest?: Participant;
+  guests: Participant[];
   messages: TemporaryMessage[];
   media: TemporaryMedia[];
-  typing?: { memberId: string; expiresAt: number };
-
+  typing: { memberId: string; expiresAt: number }[];
 };
 
 export type RoomSnapshot = {
   roomId: string;
   expiresAt: number;
   hostAlias: string;
-  guestAlias?: string;
+  guestAliases: string[];
   currentMemberId: string;
   currentAlias: string;
   participantCount: number;
-  typingAlias?: string;
+  typingAliases: string[];
   messages: TemporaryMessage[];
   media: TemporaryMediaSnapshot[];
 };
@@ -117,7 +116,8 @@ export function subscribeToRoomUpdates(
 ): () => void {
   const room = requireRoom(roomId, inviteToken);
   // Verify member
-  if (room.host.id !== memberId && room.guest?.id !== memberId) {
+  const isParticipant = room.host.id === memberId || room.guests.some(g => g.id === memberId);
+  if (!isParticipant) {
     throw new Error("You are not a participant in this room.");
   }
   if (!subscribers.has(roomId)) {
@@ -165,24 +165,35 @@ function requireRoom(roomId: string, inviteToken: string) {
 }
 
 function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
-  if (room.typing && room.typing.expiresAt <= Date.now()) room.typing = undefined;
-  const current = room.host.id === currentMemberId ? room.host : room.guest;
+  const now = Date.now();
+  room.typing = room.typing.filter(t => t.expiresAt > now);
+  
+  const current = room.host.id === currentMemberId ? room.host : room.guests.find(g => g.id === currentMemberId);
   if (!current) throw new Error("You are not a participant in this room.");
+  
+  const typingAliases = room.typing
+    .filter(t => t.memberId !== currentMemberId)
+    .map(t => {
+      if (t.memberId === room.host.id) return room.host.alias;
+      const g = room.guests.find(g => g.id === t.memberId);
+      return g ? g.alias : undefined;
+    })
+    .filter((a): a is string => !!a);
+
   return {
     roomId: room.id,
     expiresAt: room.expiresAt,
     hostAlias: room.host.alias,
-    guestAlias: room.guest?.alias,
+    guestAliases: room.guests.map(g => g.alias),
     currentMemberId,
     currentAlias: current.alias,
-    participantCount: room.guest ? 2 : 1,
-    typingAlias: room.typing && room.typing.memberId !== currentMemberId
-      ? (room.typing.memberId === room.host.id ? room.host.alias : room.guest?.alias)
-      : undefined,
-    messages: room.messages.slice(),
+    participantCount: 1 + room.guests.length,
+    typingAliases: Array.from(new Set(typingAliases)),
+    messages: room.messages.map(m => ({ ...m, deliveredTo: [...m.deliveredTo], readBy: [...m.readBy] })),
     media: room.media.map((item) => ({
       ...item,
-      dataUrl: item.consumedBy ? undefined : item.dataUrl,
+      consumedBy: [...item.consumedBy],
+      dataUrl: item.consumedBy.includes(currentMemberId) ? undefined : item.dataUrl,
     })),
   };
 }
@@ -198,8 +209,10 @@ export function createTemporaryRoom(aliasInput: string, clientIp = "default") {
     inviteToken: nanoid(32),
     expiresAt: Date.now() + ROOM_TTL_MS,
     host: { id: nanoid(12), alias },
+    guests: [],
     messages: [],
     media: [],
+    typing: [],
   };
   rooms.set(room.id, room);
   return {
@@ -210,10 +223,14 @@ export function createTemporaryRoom(aliasInput: string, clientIp = "default") {
 
 export function joinTemporaryRoom(roomId: string, inviteToken: string, aliasInput: string) {
   const room = requireRoom(roomId, inviteToken);
-  if (room.guest) throw new Error("This temporary room already has two participants.");
+  // Optional: Limit participants to prevent abuse
+  if (room.guests.length >= 49) throw new Error("This temporary room has reached the maximum of 50 participants.");
+  
   const alias = validateAlias(aliasInput);
-  room.guest = { id: nanoid(12), alias };
-  const snap = snapshot(room, room.guest.id);
+  const newGuest = { id: nanoid(12), alias };
+  room.guests.push(newGuest);
+  
+  const snap = snapshot(room, newGuest.id);
   notifyRoomSubscribers(roomId);
   return snap;
 }
@@ -224,10 +241,16 @@ export function getTemporaryRoom(roomId: string, inviteToken: string, memberId: 
 
 export function setTemporaryTyping(roomId: string, inviteToken: string, memberId: string, isTyping: boolean) {
   const room = requireRoom(roomId, inviteToken);
-  if (room.host.id !== memberId && room.guest?.id !== memberId) {
+  const isParticipant = room.host.id === memberId || room.guests.some(g => g.id === memberId);
+  if (!isParticipant) {
     throw new Error("You are not a participant in this room.");
   }
-  room.typing = isTyping ? { memberId, expiresAt: Date.now() + 6_000 } : undefined;
+  
+  room.typing = room.typing.filter(t => t.memberId !== memberId);
+  if (isTyping) {
+    room.typing.push({ memberId, expiresAt: Date.now() + 6_000 });
+  }
+  
   const snap = snapshot(room, memberId);
   notifyRoomSubscribers(roomId);
   return snap;
@@ -235,13 +258,15 @@ export function setTemporaryTyping(roomId: string, inviteToken: string, memberId
 
 export function acknowledgeTemporaryMessages(roomId: string, inviteToken: string, memberId: string) {
   const room = requireRoom(roomId, inviteToken);
-  if (room.host.id !== memberId && room.guest?.id !== memberId) {
+  const isParticipant = room.host.id === memberId || room.guests.some(g => g.id === memberId);
+  if (!isParticipant) {
     throw new Error("You are not a participant in this room.");
   }
+  
   let changed = false;
   room.messages.forEach((message) => {
-    if (message.memberId !== memberId && !message.deliveredBy) {
-      message.deliveredBy = memberId;
+    if (message.memberId !== memberId && !message.deliveredTo.includes(memberId)) {
+      message.deliveredTo.push(memberId);
       changed = true;
     }
   });
@@ -252,14 +277,16 @@ export function acknowledgeTemporaryMessages(roomId: string, inviteToken: string
 
 export function markTemporaryMessagesRead(roomId: string, inviteToken: string, memberId: string, messageIds: string[] = []) {
   const room = requireRoom(roomId, inviteToken);
-  if (room.host.id !== memberId && room.guest?.id !== memberId) {
+  const isParticipant = room.host.id === memberId || room.guests.some(g => g.id === memberId);
+  if (!isParticipant) {
     throw new Error("You are not a participant in this room.");
   }
+  
   const targetIds = new Set(messageIds);
   let changed = false;
   room.messages.forEach((message) => {
-    if (message.memberId !== memberId && !message.readBy && (targetIds.size === 0 || targetIds.has(message.id))) {
-      message.readBy = memberId;
+    if (message.memberId !== memberId && !message.readBy.includes(memberId) && (targetIds.size === 0 || targetIds.has(message.id))) {
+      message.readBy.push(memberId);
       changed = true;
     }
   });
@@ -270,19 +297,28 @@ export function markTemporaryMessagesRead(roomId: string, inviteToken: string, m
 
 export function sendTemporaryMessage(roomId: string, inviteToken: string, memberId: string, bodyInput: string) {
   const room = requireRoom(roomId, inviteToken);
-  const member = room.host.id === memberId ? room.host : room.guest?.id === memberId ? room.guest : undefined;
+  const member = room.host.id === memberId ? room.host : room.guests.find(g => g.id === memberId);
   if (!member) throw new Error("You are not a participant in this room.");
+  
   const body = bodyInput.trim();
   if (!body || body.length > MAX_MESSAGE_LENGTH) throw new Error("Message must contain 1–2,000 characters.");
-  room.typing = undefined;
-  room.messages.push({ id: nanoid(12), memberId, alias: member.alias, body, sentAt: Date.now() });
+  room.typing = room.typing.filter(t => t.memberId !== memberId);
+  room.messages.push({ 
+    id: nanoid(12), 
+    memberId, 
+    alias: member.alias, 
+    body, 
+    sentAt: Date.now(),
+    deliveredTo: [],
+    readBy: []
+  });
   const snap = snapshot(room, memberId);
   notifyRoomSubscribers(roomId);
   return snap;
 }
 
 function getParticipant(room: Room, memberId: string) {
-  const member = room.host.id === memberId ? room.host : room.guest?.id === memberId ? room.guest : undefined;
+  const member = room.host.id === memberId ? room.host : room.guests.find(g => g.id === memberId);
   if (!member) throw new Error("You are not a participant in this room.");
   return member;
 }
@@ -348,7 +384,15 @@ export function sendTemporaryMedia(roomId: string, inviteToken: string, memberId
   const room = requireRoom(roomId, inviteToken);
   const member = getParticipant(room, memberId);
   const dataUrl = validateMedia(kind, dataUrlInput);
-  room.media.push({ id: nanoid(12), memberId, alias: member.alias, kind, dataUrl, sentAt: Date.now() });
+  room.media.push({ 
+    id: nanoid(12), 
+    memberId, 
+    alias: member.alias, 
+    kind, 
+    dataUrl, 
+    sentAt: Date.now(),
+    consumedBy: []
+  });
   const snap = snapshot(room, memberId);
   notifyRoomSubscribers(roomId);
   return snap;
@@ -360,8 +404,16 @@ export function consumeTemporaryMedia(roomId: string, inviteToken: string, membe
   const item = room.media.find((media) => media.id === mediaId);
   if (!item) throw new Error("This media is no longer available.");
   if (item.memberId === memberId) throw new Error("Only the recipient can consume this media.");
-  if (item.consumedBy) throw new Error("This media is no longer available.");
-  item.consumedBy = memberId;
+  if (item.consumedBy.includes(memberId)) throw new Error("You have already consumed this media.");
+  
+  item.consumedBy.push(memberId);
+  
+  // If everyone else has consumed it, delete it from memory
+  const expectedConsumersCount = room.guests.length + (item.memberId === room.host.id ? 0 : 1) - 1; // total participants minus sender
+  if (item.consumedBy.length >= expectedConsumersCount) {
+    item.dataUrl = undefined;
+  }
+  
   const snap = snapshot(room, memberId);
   notifyRoomSubscribers(roomId);
   return snap;
@@ -369,11 +421,21 @@ export function consumeTemporaryMedia(roomId: string, inviteToken: string, membe
 
 export function leaveTemporaryRoom(roomId: string, inviteToken: string, memberId: string) {
   const room = requireRoom(roomId, inviteToken);
-  if (room.host.id !== memberId && room.guest?.id !== memberId) {
+  const isParticipant = room.host.id === memberId || room.guests.some(g => g.id === memberId);
+  if (!isParticipant) {
     throw new Error("You are not a participant in this room.");
   }
-  notifyRoomSubscribers(roomId, "A participant left the room.");
-  rooms.delete(roomId);
+  
+  // Actually, if host leaves, should we close the room? Yes.
+  // If guest leaves, we could just remove them from the guests array.
+  if (room.host.id === memberId) {
+    notifyRoomSubscribers(roomId, "The host closed the room.");
+    rooms.delete(roomId);
+  } else {
+    room.guests = room.guests.filter(g => g.id !== memberId);
+    notifyRoomSubscribers(roomId);
+  }
+  
   return { success: true as const };
 }
 

@@ -178,7 +178,7 @@ export default function Home() {
     if (messageListRef.current) {
       messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
     }
-  }, [room?.messages?.length, room?.media?.length, room?.typingAlias]);
+  }, [room?.messages?.length, room?.media?.length, room?.typingAliases && room.typingAliases.length > 0]);
 
   // When guest connects, automatically dismiss QR modal and alert host
   useEffect(() => {
@@ -205,9 +205,9 @@ export default function Home() {
   // Read receipts tracking via IntersectionObserver
   useEffect(() => {
     if (!session || !room) return;
-    const unreadIncoming = room.messages.some((item) => item.memberId !== session.memberId && !item.readBy);
+    const unreadIncoming = room.messages.some((item) => item.memberId !== session.memberId && !item.readBy.includes(session.memberId));
 
-    if (room.participantCount === 2 && room.messages.some((item) => item.memberId !== session.memberId && !item.deliveredBy)) {
+    if (room.participantCount > 1 && room.messages.some((item) => item.memberId !== session.memberId && !item.deliveredTo.includes(session.memberId))) {
       void acknowledge.mutateAsync({
         roomId: session.roomId,
         inviteToken: session.inviteToken,
@@ -230,7 +230,7 @@ export default function Home() {
           rect.left < listRect.right &&
           rect.right > listRect.left;
 
-        if (item && item.memberId !== session.memberId && !item.readBy && intersectsList) {
+        if (item && item.memberId !== session.memberId && !item.readBy.includes(session.memberId) && intersectsList) {
           visibleUnreadIds.push(messageId);
         }
       });
@@ -255,7 +255,7 @@ export default function Home() {
 
     messageNodesRef.current.forEach((node, messageId) => {
       const item = room.messages.find((m) => m.id === messageId);
-      if (item && item.memberId !== session.memberId && !item.readBy) {
+      if (item && item.memberId !== session.memberId && !item.readBy.includes(session.memberId)) {
         readObserverRef.current?.observe(node);
       }
     });
@@ -629,8 +629,11 @@ export default function Home() {
   }
 
   if (session) {
-    const connected = room?.participantCount === 2;
-    const partnerAlias = room?.hostAlias === session.alias ? room?.guestAlias : room?.hostAlias;
+    const connected = room?.participantCount && room.participantCount > 1;
+    const otherAliases = room ? (session.alias === room.hostAlias 
+      ? room.guestAliases 
+      : [room.hostAlias, ...(room.guestAliases || []).filter(a => a !== session.alias)]) : [];
+    const partnerAlias = room?.participantCount === 2 ? otherAliases[0] : (room?.participantCount > 2 ? `${room.participantCount - 1} others` : undefined);
     const isExpired = session.invite.expiresAt <= now;
     const remainingTime = formatRemaining(session.invite.expiresAt, now);
 
@@ -641,7 +644,7 @@ export default function Home() {
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <div className="relative shrink-0">
               <div className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20 text-sm sm:text-base">
-                {partnerAlias ? partnerAlias.charAt(0).toUpperCase() : session.alias.charAt(0).toUpperCase()}
+                {room?.participantCount > 2 ? <Users size={20} /> : (partnerAlias ? partnerAlias.charAt(0).toUpperCase() : session.alias.charAt(0).toUpperCase())}
               </div>
               <span
                 className={`absolute bottom-0 right-0 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border-2 border-slate-900 ${
@@ -663,7 +666,7 @@ export default function Home() {
               <p className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1.5 truncate">
                 <span>You: <strong className="text-slate-300 font-medium">{session.alias}</strong></span>
                 <span>•</span>
-                <span>{connected ? "2 participants" : "1 participant"}</span>
+                <span>{connected ? `${room.participantCount} participants` : "1 participant"}</span>
               </p>
             </div>
           </div>
@@ -770,11 +773,11 @@ export default function Home() {
 
                       {isOwn && (
                         <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-emerald-200/80 font-mono">
-                          {item.readBy ? (
+                          {item.readBy.length >= room.participantCount - 1 && room.participantCount > 1 ? (
                             <span className="flex items-center gap-0.5 text-cyan-300 font-semibold" title="Read by partner">
                               <CheckCheck size={13} /> Read
                             </span>
-                          ) : item.deliveredBy ? (
+                          ) : item.deliveredTo.length > 0 ? (
                             <span className="flex items-center gap-0.5 text-emerald-200" title="Delivered to partner">
                               <CheckCheck size={13} /> Delivered
                             </span>
@@ -794,7 +797,7 @@ export default function Home() {
                 const isOwn = item.memberId === session.memberId;
                 const isConsumed =
                   consumedMediaIds.has(item.id) ||
-                  (item.consumedBy && item.consumedBy !== session.memberId) ||
+                  (item.consumedBy && item.consumedBy && item.consumedBy.includes(session.memberId)) ||
                   !item.dataUrl;
 
                 return (
@@ -868,7 +871,7 @@ export default function Home() {
             )
           )}
 
-          {room?.typingAlias && (
+          {room?.typingAliases && room.typingAliases.length > 0 && (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/80 border border-slate-800 text-xs text-emerald-400 w-fit animate-pulse">
               <span className="flex gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" />
