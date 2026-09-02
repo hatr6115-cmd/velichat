@@ -288,14 +288,60 @@ function getParticipant(room: Room, memberId: string) {
 }
 
 function validateMedia(kind: "voice" | "photo", dataUrlInput: string) {
-  const match = dataUrlInput.match(/^data:(audio\/(?:webm|ogg|mp4|wav|aac)|image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
-  if (!match) throw new Error("Unsupported media format.");
-  const isVoice = match[1].startsWith("audio/");
-  if ((kind === "voice") !== isVoice) throw new Error("Media type does not match the selected action.");
-  const bytes = Buffer.byteLength(match[2], "base64");
+  if (typeof dataUrlInput !== "string" || !dataUrlInput.startsWith("data:")) {
+    throw new Error("Unsupported media format.");
+  }
+
+  const commaIdx = dataUrlInput.indexOf(",");
+  if (commaIdx === -1) throw new Error("Unsupported media format.");
+
+  const header = dataUrlInput.slice(0, commaIdx);
+  const base64Raw = dataUrlInput.slice(commaIdx + 1).replace(/\s+/g, "");
+
+  if (!header.endsWith(";base64")) throw new Error("Media must be base64 encoded.");
+
+  const rawMime = header.slice(5, -7).split(";")[0].trim().toLowerCase();
+
+  const allowedAudio = [
+    "audio/webm",
+    "audio/ogg",
+    "audio/mp4",
+    "audio/wav",
+    "audio/aac",
+    "audio/m4a",
+    "audio/x-m4a",
+    "audio/mpeg",
+    "audio/mp3",
+  ];
+  const allowedImage = [
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/heic",
+    "image/heif",
+  ];
+
+  const isVoice = allowedAudio.includes(rawMime);
+  const isImage = allowedImage.includes(rawMime);
+
+  if (kind === "voice" && !isVoice) {
+    if (isImage) throw new Error("Media type does not match the selected action.");
+    throw new Error(`Unsupported audio format: ${rawMime}`);
+  }
+  if (kind === "photo" && !isImage) {
+    if (isVoice) throw new Error("Media type does not match the selected action.");
+    throw new Error(`Unsupported image format: ${rawMime}`);
+  }
+
+  const bytes = Buffer.byteLength(base64Raw, "base64");
   const maxBytes = kind === "voice" ? MAX_VOICE_BYTES : MAX_PHOTO_BYTES;
-  if (bytes > maxBytes) throw new Error(`${kind === "voice" ? "Voice note" : "Photo"} is too large.`);
-  return dataUrlInput;
+  if (bytes > maxBytes) {
+    throw new Error(`${kind === "voice" ? "Voice note" : "Photo"} is too large.`);
+  }
+
+  return `data:${rawMime};base64,${base64Raw}`;
 }
 
 export function sendTemporaryMedia(roomId: string, inviteToken: string, memberId: string, kind: "voice" | "photo", dataUrlInput: string) {

@@ -373,6 +373,68 @@ export default function Home() {
     }
   }
 
+  function getBestAudioMimeType(): string {
+    if (typeof window === "undefined" || !window.MediaRecorder) return "";
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/aac",
+      "audio/ogg;codecs=opus",
+      "audio/wav",
+    ];
+    for (const candidate of candidates) {
+      if (MediaRecorder.isTypeSupported(candidate)) {
+        return candidate;
+      }
+    }
+    return "";
+  }
+
+  async function compressImageFile(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const MAX_DIM = 1400;
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
+        if (width > MAX_DIM || height > MAX_DIM) {
+          if (width > height) {
+            height = Math.round((height * MAX_DIM) / width);
+            width = MAX_DIM;
+          } else {
+            width = Math.round((width * MAX_DIM) / height);
+            height = MAX_DIM;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error("Could not process photo."));
+          reader.readAsDataURL(file);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        resolve(dataUrl);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Could not load photo."));
+        reader.readAsDataURL(file);
+      };
+      img.src = objectUrl;
+    });
+  }
+
   function blobToDataUrl(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -425,26 +487,31 @@ export default function Home() {
 
   async function startRecording() {
     if (!session || room?.participantCount !== 2) return;
-    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       toast.error("Audio recording is not supported in this browser.");
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+      const preferredMime = getBestAudioMimeType();
+      const options = preferredMime ? { mimeType: preferredMime } : undefined;
+      const recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
       audioChunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
       recorder.onstop = async () => {
         stream.getTracks().forEach((track) => track.stop());
         if (audioChunksRef.current.length > 0) {
           try {
-            const dataUrl = await blobToDataUrl(
-              new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" })
-            );
+            const recordedType = recorder.mimeType || preferredMime || "audio/webm";
+            const cleanType = recordedType.split(";")[0].trim() || "audio/webm";
+            const audioBlob = new Blob(audioChunksRef.current, { type: cleanType });
+            const dataUrl = await blobToDataUrl(audioBlob);
             await sendMedia.mutateAsync({
               roomId: session.roomId,
               inviteToken: session.inviteToken,
@@ -460,7 +527,7 @@ export default function Home() {
       };
 
       mediaRecorderRef.current = recorder;
-      recorder.start();
+      recorder.start(250);
       setIsRecording(true);
       setRecordingSeconds(0);
 
@@ -468,7 +535,7 @@ export default function Home() {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
     } catch {
-      toast.error("Microphone access denied.");
+      toast.error("Microphone access denied or not available.");
     }
   }
 
@@ -492,19 +559,19 @@ export default function Home() {
 
   async function handlePhotoFileSelected(file: File | undefined) {
     if (!file) return;
-    if (!file.type.match(/^image\/(jpeg|png|webp|gif)$/)) {
-      toast.error("Please choose a JPG, PNG, WebP, or GIF image.");
-      return;
-    }
-    if (file.size > 8 * 1024 * 1024) {
-      toast.error("Image file must be under 8 MB.");
+    if (
+      !file.type.match(/^image\/(jpeg|png|webp|gif|heic|heif)$/i) &&
+      !file.name.match(/\.(jpe?g|png|webp|gif|heic|heif)$/i)
+    ) {
+      toast.error("Please choose a valid photo (JPG, PNG, WebP, GIF).");
       return;
     }
     try {
-      const dataUrl = await blobToDataUrl(file);
+      const dataUrl = await compressImageFile(file);
       setSelectedPhoto({ file, dataUrl });
+      toast.success("Photo attached (view once)");
     } catch {
-      toast.error("Failed to read image.");
+      toast.error("Failed to process photo.");
     }
   }
 
@@ -525,9 +592,10 @@ export default function Home() {
 
   async function openViewOncePhoto(item: { id: string; dataUrl?: string }) {
     if (!item.dataUrl) return;
-    await consumeMediaOnce(item.id);
-    setActivePhoto(item.dataUrl);
+    const url = item.dataUrl;
+    setActivePhoto(url);
     setPhotoCountdown(10);
+    void consumeMediaOnce(item.id);
 
     const timer = setInterval(() => {
       setPhotoCountdown((prev) => {
@@ -567,32 +635,32 @@ export default function Home() {
     const remainingTime = formatRemaining(session.invite.expiresAt, now);
 
     return (
-      <div className="flex flex-col h-screen max-w-4xl mx-auto bg-slate-950 text-slate-100 antialiased select-none">
+      <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-full max-w-4xl mx-auto bg-slate-950 text-slate-100 antialiased select-none overflow-hidden">
         {/* Top Navigation Header */}
-        <header className="flex items-center justify-between px-5 py-3.5 bg-slate-900/90 border-b border-slate-800/80 backdrop-blur-md z-20">
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <div className="flex items-center justify-center w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20">
+        <header className="flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3.5 bg-slate-900/90 border-b border-slate-800/80 backdrop-blur-md z-20 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="relative shrink-0">
+              <div className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20 text-sm sm:text-base">
                 {partnerAlias ? partnerAlias.charAt(0).toUpperCase() : session.alias.charAt(0).toUpperCase()}
               </div>
               <span
-                className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-slate-900 ${
+                className={`absolute bottom-0 right-0 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border-2 border-slate-900 ${
                   connected ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
                 }`}
               />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold text-white tracking-wide">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <h2 className="text-xs sm:text-sm font-semibold text-white tracking-wide truncate max-w-[110px] sm:max-w-[200px]">
                   {connected ? partnerAlias : "Waiting for guest"}
                 </h2>
                 {isSseConnected && (
-                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-medium">
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[9px] sm:text-[10px] font-medium shrink-0">
                     <Radio size={10} className="animate-pulse" /> Live
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-400 flex items-center gap-1.5">
+              <p className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1.5 truncate">
                 <span>You: <strong className="text-slate-300 font-medium">{session.alias}</strong></span>
                 <span>•</span>
                 <span>{connected ? "2 participants" : "1 participant"}</span>
@@ -601,15 +669,15 @@ export default function Home() {
           </div>
 
           {/* Header Actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <div
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono font-medium ${
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl border text-[11px] sm:text-xs font-mono font-medium ${
                 session.invite.expiresAt - now < 300_000
                   ? "bg-red-500/10 border-red-500/30 text-red-400 animate-pulse"
                   : "bg-slate-800/80 border-slate-700/60 text-slate-300"
               }`}
             >
-              <Clock3 size={13} />
+              <Clock3 size={12} />
               <span>{isExpired ? "00:00" : remainingTime}</span>
             </div>
 
@@ -617,7 +685,7 @@ export default function Home() {
               size="sm"
               variant="outline"
               onClick={() => setIsQrModalOpen(true)}
-              className="rounded-xl border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs h-9 px-3 gap-1.5"
+              className="rounded-xl border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs h-8 sm:h-9 px-2 sm:px-3 gap-1.5"
             >
               <QrCode size={14} className="text-emerald-400" />
               <span className="hidden sm:inline">Invite QR</span>
@@ -627,7 +695,7 @@ export default function Home() {
               size="sm"
               variant="outline"
               onClick={() => setIsEndModalOpen(true)}
-              className="rounded-xl border-red-500/30 hover:bg-red-500/10 hover:border-red-500/50 text-red-400 text-xs h-9 px-3 gap-1.5"
+              className="rounded-xl border-red-500/30 hover:bg-red-500/10 hover:border-red-500/50 text-red-400 text-xs h-8 sm:h-9 px-2 sm:px-3 gap-1.5"
             >
               <LogOut size={14} />
               <span className="hidden sm:inline">End Chat</span>
@@ -638,7 +706,7 @@ export default function Home() {
         {/* Message Stream */}
         <main
           ref={messageListRef}
-          className="flex-1 overflow-y-auto px-4 py-6 space-y-4 bg-gradient-to-b from-slate-950 via-slate-900/30 to-slate-950"
+          className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 space-y-3.5 bg-gradient-to-b from-slate-950 via-slate-900/30 to-slate-950 overscroll-contain"
         >
           {!connected && (
             <div className="flex flex-col items-center justify-center p-8 text-center bg-slate-900/50 border border-slate-800/80 rounded-3xl max-w-md mx-auto my-6 backdrop-blur-sm">
@@ -740,7 +808,7 @@ export default function Home() {
                     </div>
 
                     <div
-                      className={`p-3.5 rounded-2xl max-w-xs sm:max-w-sm border ${
+                      className={`p-3 sm:p-3.5 rounded-2xl max-w-[85%] sm:max-w-sm border ${
                         isOwn
                           ? "bg-slate-900 border-emerald-500/30 text-slate-100"
                           : "bg-slate-800/90 border-slate-700/80 text-slate-100"
@@ -753,15 +821,23 @@ export default function Home() {
                             <span>Voice note played once</span>
                           </div>
                         ) : (
-                          <div className="flex items-center gap-3">
+                          <div className="flex flex-col gap-1.5 py-0.5 min-w-[180px] sm:min-w-[240px]">
                             <audio
                               controls
+                              controlsList="nodownload"
+                              playsInline
+                              preload="auto"
                               src={item.dataUrl}
-                              className="w-full h-8 accent-emerald-500"
-                              onPlay={() => {
-                                if (!isOwn) consumeMediaOnce(item.id);
+                              className="w-full h-8 accent-emerald-500 rounded-lg"
+                              onEnded={() => {
+                                if (!isOwn) void consumeMediaOnce(item.id);
                               }}
                             />
+                            {!isOwn && (
+                              <span className="text-[10px] text-slate-400 px-1">
+                                Plays once • Vanishes when finished
+                              </span>
+                            )}
                           </div>
                         )
                       ) : isConsumed ? (
@@ -827,15 +903,15 @@ export default function Home() {
         )}
 
         {/* Bottom Floating Composer */}
-        <footer className="p-4 bg-slate-900/90 border-t border-slate-800/80 backdrop-blur-md">
+        <footer className="p-2.5 sm:p-4 bg-slate-900/90 border-t border-slate-800/80 backdrop-blur-md shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           {isRecording ? (
-            <div className="flex items-center justify-between gap-3 p-2 bg-slate-950 border border-red-500/30 rounded-2xl shadow-inner">
-              <div className="flex items-center gap-3 pl-3">
-                <span className="flex h-3 w-3 relative">
+            <div className="flex items-center justify-between gap-2 sm:gap-3 p-2 bg-slate-950 border border-red-500/30 rounded-2xl shadow-inner max-w-3xl mx-auto w-full">
+              <div className="flex items-center gap-2 sm:gap-3 pl-2 sm:pl-3 min-w-0">
+                <span className="flex h-3 w-3 relative shrink-0">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
                   <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
                 </span>
-                <span className="text-xs font-mono font-medium text-red-400">
+                <span className="text-xs font-mono font-medium text-red-400 truncate">
                   Recording {String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:
                   {String(recordingSeconds % 60).padStart(2, "0")}
                 </span>
@@ -849,30 +925,30 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={cancelRecording}
-                  className="rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 text-xs h-9 px-3 gap-1"
+                  className="rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 text-xs h-9 px-2.5 sm:px-3 gap-1"
                 >
-                  <X size={15} /> Cancel
+                  <X size={15} /> <span className="hidden sm:inline">Cancel</span>
                 </Button>
                 <Button
                   size="sm"
                   onClick={stopAndSendRecording}
-                  className="rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs h-9 px-4 gap-1.5 shadow-md shadow-red-950/40"
+                  className="rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs h-9 px-3 sm:px-4 gap-1.5 shadow-md shadow-red-950/40"
                 >
-                  <Send size={14} /> Send Voice
+                  <Send size={14} /> Send
                 </Button>
               </div>
             </div>
           ) : (
-            <div className="flex items-end gap-2 max-w-3xl mx-auto">
+            <div className="flex items-end gap-1.5 sm:gap-2 max-w-3xl mx-auto w-full">
               <input
                 id="photo-upload-input"
                 type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
+                accept="image/*"
                 className="hidden"
                 onChange={(e) => {
                   void handlePhotoFileSelected(e.target.files?.[0]);
@@ -885,7 +961,7 @@ export default function Home() {
                 size="icon"
                 disabled={!connected || isExpired}
                 onClick={() => document.getElementById("photo-upload-input")?.click()}
-                className="rounded-2xl h-11 w-11 shrink-0 border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-emerald-400"
+                className="rounded-2xl h-10 w-10 sm:h-11 sm:w-11 shrink-0 border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-emerald-400"
                 aria-label="Attach view-once photo"
               >
                 <Camera size={18} />
@@ -897,13 +973,13 @@ export default function Home() {
                 size="icon"
                 disabled={!connected || isExpired}
                 onClick={startRecording}
-                className="rounded-2xl h-11 w-11 shrink-0 border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-emerald-400"
+                className="rounded-2xl h-10 w-10 sm:h-11 sm:w-11 shrink-0 border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-emerald-400"
                 aria-label="Record voice note"
               >
                 <Mic size={18} />
               </Button>
 
-              <div className="flex-1 relative">
+              <div className="flex-1 min-w-0 relative">
                 <textarea
                   ref={textareaRef}
                   value={message}
@@ -923,14 +999,14 @@ export default function Home() {
                       : "Waiting for guest to join…"
                   }
                   rows={1}
-                  className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40 text-slate-100 placeholder-slate-500 text-sm resize-none max-h-32 transition-colors outline-none"
+                  className="w-full px-3.5 sm:px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40 text-slate-100 placeholder-slate-500 text-sm resize-none max-h-32 transition-colors outline-none leading-relaxed"
                 />
               </div>
 
               <Button
                 onClick={() => void send()}
                 disabled={!connected || isExpired || (!message.trim() && !selectedPhoto)}
-                className="rounded-2xl h-11 w-11 shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40 disabled:bg-slate-800 shadow-md shadow-emerald-950/30"
+                className="rounded-2xl h-10 w-10 sm:h-11 sm:w-11 shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40 disabled:bg-slate-800 shadow-md shadow-emerald-950/30"
                 aria-label="Send message"
               >
                 <Send size={17} />
@@ -1027,19 +1103,19 @@ export default function Home() {
   const isJoin = Boolean(invite);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-emerald-500/30 selection:text-emerald-200">
-      <header className="flex items-center justify-between max-w-5xl w-full mx-auto px-6 py-5">
-        <a href="/" className="flex items-center gap-2.5 text-white font-bold text-lg tracking-tight group">
-          <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 group-hover:scale-105 transition-transform">
-            <MessageSquare size={18} />
+    <div className="min-h-[100dvh] bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-emerald-500/30 selection:text-emerald-200 overflow-x-hidden">
+      <header className="flex items-center justify-between max-w-5xl w-full mx-auto px-4 sm:px-6 py-4 sm:py-5">
+        <a href="/" className="flex items-center gap-2.5 text-white font-bold text-base sm:text-lg tracking-tight group">
+          <div className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 group-hover:scale-105 transition-transform">
+            <MessageSquare size={17} />
           </div>
           <span>Veil<span className="text-emerald-400 font-extrabold">Chat</span></span>
         </a>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <button
             onClick={() => setIsScannerOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-medium text-slate-300 hover:text-white transition-all shadow-sm"
+            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-medium text-slate-300 hover:text-white transition-all shadow-sm"
           >
             <Camera size={14} className="text-emerald-400" />
             <span>Scan QR</span>
@@ -1050,7 +1126,7 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="max-w-md w-full mx-auto px-5 py-8 my-auto">
+      <main className="max-w-md w-full mx-auto px-4 sm:px-5 py-6 sm:py-8 my-auto">
         <div className="text-center mb-7">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 mb-3 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
             <Sparkles size={13} /> 2 People • 30 Minutes • No Accounts
