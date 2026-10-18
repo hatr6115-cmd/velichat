@@ -35,19 +35,52 @@ export const CallModal: React.FC<CallModalProps> = ({
 }) => {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const [callDuration, setCallDuration] = useState(0);
+  const [needsUserTap, setNeedsUserTap] = useState(false);
 
   useEffect(() => {
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
+      localVideoRef.current.play().catch((e) => console.warn("Local play error:", e));
     }
   }, [localStream]);
 
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
+    const video = remoteVideoRef.current;
+    if (video && remoteStream && kind === "video") {
+      video.srcObject = remoteStream;
+      video.play().then(() => {
+        setNeedsUserTap(false);
+      }).catch((err) => {
+        console.warn("Autoplay was prevented on remote video:", err);
+        setNeedsUserTap(true);
+      });
     }
-  }, [remoteStream]);
+  }, [remoteStream, kind]);
+
+  useEffect(() => {
+    const audio = remoteAudioRef.current;
+    if (audio && remoteStream) {
+      audio.srcObject = remoteStream;
+      audio.play().then(() => {
+        setNeedsUserTap(false);
+      }).catch((err) => {
+        console.warn("Autoplay was prevented on remote audio:", err);
+        setNeedsUserTap(true);
+      });
+    }
+  }, [remoteStream, kind]);
+
+  const handleManualPlay = () => {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.play().catch(console.warn);
+    }
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.play().catch(console.warn);
+    }
+    setNeedsUserTap(false);
+  };
 
   useEffect(() => {
     let timer: number | undefined;
@@ -86,18 +119,24 @@ export const CallModal: React.FC<CallModalProps> = ({
         </div>
 
         {/* Video / Audio Area */}
-        <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden border-b border-green-500/20">
+        <div
+          onClick={handleManualPlay}
+          className="relative flex-1 bg-black flex items-center justify-center overflow-hidden border-b border-green-500/20 cursor-pointer"
+        >
+          {/* Always mount audio tag so voice stream is never blocked */}
+          <audio ref={remoteAudioRef} autoPlay playsInline />
+
           {kind === "video" && (
             <>
               <div className="absolute inset-0 flex items-center justify-center bg-black">
-                {remoteStream ? (
-                  <video
-                    ref={remoteVideoRef}
-                    autoPlay
-                    playsInline
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
+                {/* Persistent video element prevents unmount/remount race conditions */}
+                <video
+                  ref={remoteVideoRef}
+                  autoPlay
+                  playsInline
+                  className={`w-full h-full object-cover ${remoteStream ? "block" : "hidden"}`}
+                />
+                {!remoteStream && (
                   <div className="flex flex-col items-center gap-2 text-green-500/70 text-xs">
                     <div className="border border-green-500/40 px-3 py-1 uppercase tracking-widest text-green-400">
                       {partnerAlias}
@@ -140,8 +179,12 @@ export const CallModal: React.FC<CallModalProps> = ({
                   {callStatus === "ended" && "STATUS: TERMINATED"}
                 </p>
               </div>
+            </div>
+          )}
 
-              <audio ref={remoteVideoRef as any} autoPlay playsInline />
+          {needsUserTap && (
+            <div className="absolute bottom-2 z-20 px-3 py-1 bg-green-500 text-black text-[11px] font-bold uppercase tracking-wider animate-pulse">
+              [TAP TO PLAY MEDIA STREAM]
             </div>
           )}
         </div>

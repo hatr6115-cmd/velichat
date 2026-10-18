@@ -208,12 +208,44 @@ export default function Home() {
     }
   }, [room?.participantCount, isQrModalOpen]);
 
-  // WebRTC ICE Servers
+  // WebRTC ICE Servers with high availability public STUNs
   const iceServers: RTCConfiguration = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+      { urls: "stun:stun3.l.google.com:19302" },
+      { urls: "stun:stun4.l.google.com:19302" },
+      { urls: "stun:stun.cloudflare.com:3478" },
+      { urls: "stun:openrelay.metered.ca:80" },
     ],
+    iceCandidatePoolSize: 10,
+  };
+
+  const getMediaStream = async (kind: "audio" | "video"): Promise<MediaStream> => {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video:
+          kind === "video"
+            ? {
+                facingMode: "user",
+                width: { ideal: 640 },
+                height: { ideal: 480 },
+              }
+            : false,
+      });
+    } catch (err) {
+      console.warn("Failed with ideal constraints, trying basic constraints:", err);
+      return await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: kind === "video",
+      });
+    }
   };
 
   const cleanupCall = () => {
@@ -240,21 +272,12 @@ export default function Home() {
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: kind === "video",
-      });
+      cleanupCall();
+      const stream = await getMediaStream(kind);
       setLocalStream(stream);
       setCallKind(kind);
       setIsInCall(true);
       setCallStatus("calling");
-
-      await startCallMutation.mutateAsync({
-        roomId: session.roomId,
-        inviteToken: session.inviteToken,
-        memberId: session.memberId,
-        kind,
-      });
 
       const pc = new RTCPeerConnection(iceServers);
       peerConnectionRef.current = pc;
@@ -262,10 +285,17 @@ export default function Home() {
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       pc.ontrack = (event) => {
+        console.log("[WebRTC Caller] ontrack:", event.track.kind);
         if (event.streams && event.streams[0]) {
           setRemoteStream(event.streams[0]);
-          setCallStatus("connected");
+        } else {
+          setRemoteStream((prev) => {
+            const s = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
+            s.addTrack(event.track);
+            return s;
+          });
         }
+        setCallStatus("connected");
       };
 
       pc.onicecandidate = (event) => {
@@ -281,8 +311,26 @@ export default function Home() {
         }
       };
 
-      const offer = await pc.createOffer();
+      pc.onconnectionstatechange = () => {
+        console.log("[WebRTC Caller] connectionState:", pc.connectionState);
+        if (pc.connectionState === "connected") {
+          setCallStatus("connected");
+        }
+      };
+
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: kind === "video",
+      });
       await pc.setLocalDescription(offer);
+
+      await startCallMutation.mutateAsync({
+        roomId: session.roomId,
+        inviteToken: session.inviteToken,
+        memberId: session.memberId,
+        kind,
+        offer: JSON.stringify(offer),
+      });
 
       await sendSignalMutation.mutateAsync({
         roomId: session.roomId,
@@ -292,7 +340,8 @@ export default function Home() {
         type: "offer",
         payload: JSON.stringify(offer),
       });
-    } catch {
+    } catch (err: any) {
+      console.error("Start call error:", err);
       toast.error("PERMISSION_DENIED: MEDIA_HARDWARE");
       cleanupCall();
     }
@@ -301,30 +350,30 @@ export default function Home() {
   const handleAcceptCall = async () => {
     if (!session || !room?.call) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: room.call.kind === "video",
-      });
+      const callData = room.call;
+      const stream = await getMediaStream(callData.kind);
       setLocalStream(stream);
-      setCallKind(room.call.kind);
+      setCallKind(callData.kind);
       setIsInCall(true);
-
-      await joinCallMutation.mutateAsync({
-        roomId: session.roomId,
-        inviteToken: session.inviteToken,
-        memberId: session.memberId,
-      });
 
       const pc = new RTCPeerConnection(iceServers);
       peerConnectionRef.current = pc;
 
+      // Add receiver stream tracks so caller receives receiver voice and video
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       pc.ontrack = (event) => {
+        console.log("[WebRTC Receiver] ontrack:", event.track.kind);
         if (event.streams && event.streams[0]) {
           setRemoteStream(event.streams[0]);
-          setCallStatus("connected");
+        } else {
+          setRemoteStream((prev) => {
+            const s = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
+            s.addTrack(event.track);
+            return s;
+          });
         }
+        setCallStatus("connected");
       };
 
       pc.onicecandidate = (event) => {
@@ -333,21 +382,37 @@ export default function Home() {
             roomId: session.roomId,
             inviteToken: session.inviteToken,
             memberId: session.memberId,
-            receiverId: room.call?.initiatorId || "all",
+            receiverId: callData.initiatorId || "all",
             type: "ice",
             payload: JSON.stringify(event.candidate),
           });
         }
       };
 
-      const offerSignal = (room.signals || []).find((s) => s.type === "offer");
-      if (offerSignal) {
-        processedSignalIdsRef.current.add(offerSignal.id);
-        const offerDesc = JSON.parse(offerSignal.payload);
+      pc.onconnectionstatechange = () => {
+        console.log("[WebRTC Receiver] connectionState:", pc.connectionState);
+        if (pc.connectionState === "connected") {
+          setCallStatus("connected");
+        }
+      };
+
+      await joinCallMutation.mutateAsync({
+        roomId: session.roomId,
+        inviteToken: session.inviteToken,
+        memberId: session.memberId,
+      });
+
+      const offerPayload = callData.offer || (room.signals || []).find((s) => s.type === "offer")?.payload;
+      if (offerPayload) {
+        const offerDesc = JSON.parse(offerPayload);
         await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
 
         for (const candidate of pendingIceCandidatesRef.current) {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (e) {
+            console.warn("Adding queued ICE candidate error:", e);
+          }
         }
         pendingIceCandidatesRef.current = [];
 
@@ -358,13 +423,14 @@ export default function Home() {
           roomId: session.roomId,
           inviteToken: session.inviteToken,
           memberId: session.memberId,
-          receiverId: room.call.initiatorId,
+          receiverId: callData.initiatorId,
           type: "answer",
           payload: JSON.stringify(answer),
         });
         setCallStatus("connected");
       }
-    } catch {
+    } catch (err: any) {
+      console.error("Failed to accept call:", err);
       toast.error("ERR: FAILED_TO_ACCEPT_CALL");
       handleRejectCall();
     }
@@ -435,56 +501,130 @@ export default function Home() {
     }
   };
 
-  // Process incoming Call signals
+  // Process incoming Call signals & Active Call state
   useEffect(() => {
     if (!session || !room) return;
 
+    // Detect incoming call for non-initiator
     if (room.call && room.call.initiatorId !== session.memberId && !isInCall) {
       setIsInCall(true);
       setCallKind(room.call.kind);
       setCallStatus("ringing");
     }
 
-    if (!room.call && isInCall) {
+    // Call was terminated remotely
+    if (!room.call && isInCall && callStatus !== "ended") {
       cleanupCall();
       toast.info("CALL_TERMINATED");
+      return;
     }
 
-    if (room.signals && room.signals.length > 0) {
-      room.signals.forEach(async (signal) => {
-        if (processedSignalIdsRef.current.has(signal.id)) return;
-        processedSignalIdsRef.current.add(signal.id);
+    const pc = peerConnectionRef.current;
 
-        const pc = peerConnectionRef.current;
+    // Caller: if answer is attached to room.call but pc has no remoteDescription yet
+    if (
+      room.call &&
+      room.call.initiatorId === session.memberId &&
+      room.call.answer &&
+      pc &&
+      !pc.remoteDescription
+    ) {
+      (async () => {
+        try {
+          console.log("[WebRTC Caller] applying answer from room.call.answer");
+          const answerDesc = JSON.parse(room.call!.answer!);
+          await pc.setRemoteDescription(new RTCSessionDescription(answerDesc));
+          setCallStatus("connected");
 
-        if (signal.type === "answer" && pc) {
-          try {
-            const answerDesc = JSON.parse(signal.payload);
-            await pc.setRemoteDescription(new RTCSessionDescription(answerDesc));
-            setCallStatus("connected");
-
-            for (const candidate of pendingIceCandidatesRef.current) {
-              await pc.addIceCandidate(new RTCIceCandidate(candidate));
-            }
-            pendingIceCandidatesRef.current = [];
-          } catch (e) {
-            console.error("Error setting answer:", e);
+          for (const candidate of pendingIceCandidatesRef.current) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn);
           }
-        } else if (signal.type === "ice") {
-          try {
-            const candidateInit = JSON.parse(signal.payload);
-            if (pc && pc.remoteDescription) {
-              await pc.addIceCandidate(new RTCIceCandidate(candidateInit));
-            } else {
-              pendingIceCandidatesRef.current.push(candidateInit);
+          pendingIceCandidatesRef.current = [];
+        } catch (e) {
+          console.error("Error setting answer from call object:", e);
+        }
+      })();
+    }
+
+    // Receiver: if accepted and offer arrives after accept
+    if (
+      room.call &&
+      room.call.initiatorId !== session.memberId &&
+      room.call.offer &&
+      pc &&
+      !pc.remoteDescription
+    ) {
+      (async () => {
+        try {
+          console.log("[WebRTC Receiver] applying offer from room.call.offer");
+          const offerDesc = JSON.parse(room.call!.offer!);
+          await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
+
+          for (const candidate of pendingIceCandidatesRef.current) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn);
+          }
+          pendingIceCandidatesRef.current = [];
+
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          await sendSignalMutation.mutateAsync({
+            roomId: session.roomId,
+            inviteToken: session.inviteToken,
+            memberId: session.memberId,
+            receiverId: room.call!.initiatorId,
+            type: "answer",
+            payload: JSON.stringify(answer),
+          });
+          setCallStatus("connected");
+        } catch (e) {
+          console.error("Error creating answer in effect:", e);
+        }
+      })();
+    }
+
+    // Process signals in sequential order
+    if (room.signals && room.signals.length > 0) {
+      const processSignals = async () => {
+        for (const signal of room.signals) {
+          if (processedSignalIdsRef.current.has(signal.id)) continue;
+          processedSignalIdsRef.current.add(signal.id);
+
+          const currentPc = peerConnectionRef.current;
+
+          if (signal.type === "answer" && currentPc) {
+            try {
+              if (!currentPc.remoteDescription) {
+                console.log("[WebRTC] Applying answer signal");
+                const answerDesc = JSON.parse(signal.payload);
+                await currentPc.setRemoteDescription(new RTCSessionDescription(answerDesc));
+                setCallStatus("connected");
+
+                for (const candidate of pendingIceCandidatesRef.current) {
+                  await currentPc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn);
+                }
+                pendingIceCandidatesRef.current = [];
+              }
+            } catch (e) {
+              console.error("Error setting answer signal:", e);
             }
-          } catch (e) {
-            console.error("Error adding ice:", e);
+          } else if (signal.type === "ice") {
+            try {
+              const candidateInit = JSON.parse(signal.payload);
+              if (currentPc && currentPc.remoteDescription) {
+                await currentPc.addIceCandidate(new RTCIceCandidate(candidateInit)).catch(console.warn);
+              } else {
+                pendingIceCandidatesRef.current.push(candidateInit);
+              }
+            } catch (e) {
+              console.error("Error adding ice candidate:", e);
+            }
           }
         }
-      });
+      };
+      void processSignals();
     }
-  }, [room?.call, room?.signals, session, isInCall]);
+  }, [room?.call, room?.signals, session, isInCall, callStatus]);
 
   // Dismiss modals on Escape key
   useEffect(() => {
@@ -920,11 +1060,14 @@ export default function Home() {
   }
 
   if (session) {
-    const connected = room?.participantCount && room.participantCount > 1;
-    const otherAliases = room ? (session.alias === room.hostAlias 
-      ? room.guestAliases 
-      : [room.hostAlias, ...(room.guestAliases || []).filter(a => a !== session.alias)]) : [];
-    const partnerAlias = room?.participantCount === 2 ? otherAliases[0] : (room?.participantCount > 2 ? `${room.participantCount - 1} NODES` : undefined);
+    const pCount = room?.participantCount ?? 1;
+    const connected = pCount > 1;
+    const otherAliases = room
+      ? session.alias === room.hostAlias
+        ? room.guestAliases
+        : [room.hostAlias, ...(room.guestAliases || []).filter((a) => a !== session.alias)]
+      : [];
+    const partnerAlias = pCount === 2 ? otherAliases[0] : pCount > 2 ? `${pCount - 1} NODES` : undefined;
     const roomExpiresAt = room?.expiresAt || session.invite.expiresAt;
     const isExpired = roomExpiresAt <= now;
     const remainingTime = formatRemaining(roomExpiresAt, now);
@@ -941,7 +1084,7 @@ export default function Home() {
                 &gt; {connected ? partnerAlias : "WAITING_PEER..."}
               </span>
               <span className="text-[10px] text-green-700 block">
-                UID: {session.alias} [{connected ? `${room.participantCount}P` : "1P"}]
+                UID: {session.alias} [{connected ? `${pCount}P` : "1P"}]
               </span>
             </div>
           </div>

@@ -70,8 +70,11 @@ export const appRouter = router({
     leave: publicProcedure.input(roomInput).mutation(({ input }) =>
       leaveTemporaryRoom(input.roomId, input.inviteToken, input.memberId),
     ),
-    startCall: publicProcedure.input(roomInput.extend({ kind: z.enum(["audio", "video"]) })).mutation(({ input }) =>
-      startTemporaryCall(input.roomId, input.inviteToken, input.memberId, input.kind),
+    startCall: publicProcedure.input(roomInput.extend({
+      kind: z.enum(["audio", "video"]),
+      offer: z.string().optional(),
+    })).mutation(({ input }) =>
+      startTemporaryCall(input.roomId, input.inviteToken, input.memberId, input.kind, input.offer),
     ),
     joinCall: publicProcedure.input(roomInput).mutation(({ input }) =>
       joinTemporaryCall(input.roomId, input.inviteToken, input.memberId),

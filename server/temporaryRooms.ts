@@ -13,6 +13,8 @@ export type ActiveCall = {
   kind: 'audio' | 'video';
   startedAt: number;
   participants: string[];
+  offer?: string;
+  answer?: string;
 };
 
 import { nanoid } from "nanoid";
@@ -481,7 +483,13 @@ export function roomCountForTests() {
   return rooms.size;
 }
 
-export function startTemporaryCall(roomId: string, inviteToken: string, memberId: string, kind: 'audio' | 'video') {
+export function startTemporaryCall(
+  roomId: string,
+  inviteToken: string,
+  memberId: string,
+  kind: 'audio' | 'video',
+  offer?: string
+) {
   const room = requireRoom(roomId, inviteToken);
   const participant = getParticipant(room, memberId);
   room.call = {
@@ -489,7 +497,8 @@ export function startTemporaryCall(roomId: string, inviteToken: string, memberId
     initiatorAlias: participant.alias,
     kind,
     startedAt: Date.now(),
-    participants: [memberId]
+    participants: [memberId],
+    offer,
   };
   room.signals = [];
   const snap = snapshot(room, memberId);
@@ -535,9 +544,24 @@ export function sendTemporaryCallSignal(
   const room = requireRoom(roomId, inviteToken);
   getParticipant(room, memberId);
   if (!room.signals) room.signals = [];
-  if (room.signals.length > 50) {
-    room.signals = room.signals.slice(-30);
+
+  // Anchor offer & answer directly on call object so they are never lost or pruned
+  if (room.call) {
+    if (type === 'offer') {
+      room.call.offer = payload;
+    }
+    if (type === 'answer') {
+      room.call.answer = payload;
+    }
   }
+
+  // Prevent memory unbounded growth while keeping non-ice signals intact
+  if (room.signals.length > 200) {
+    const nonIce = room.signals.filter((s) => s.type !== 'ice');
+    const ice = room.signals.filter((s) => s.type === 'ice').slice(-100);
+    room.signals = [...nonIce, ...ice];
+  }
+
   room.signals.push({
     id: nanoid(10),
     senderId: memberId,
