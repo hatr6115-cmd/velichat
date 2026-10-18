@@ -1,3 +1,4 @@
+import { CallModal } from "@/components/CallModal";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -24,6 +25,8 @@ import {
   Square,
   Users,
   Volume2,
+  Video,
+  Phone,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -122,6 +125,10 @@ export default function Home() {
   const acknowledge = trpc.temporary.acknowledge.useMutation();
   const markRead = trpc.temporary.markRead.useMutation();
   const leaveRoom = trpc.temporary.leave.useMutation();
+  const startCallMutation = trpc.temporary.startCall.useMutation();
+  const joinCallMutation = trpc.temporary.joinCall.useMutation();
+  const endCallMutation = trpc.temporary.endCall.useMutation();
+  const sendSignalMutation = trpc.temporary.sendSignal.useMutation();
 
   const typingTimerRef = useRef<number | undefined>(undefined);
   const recordingTimerRef = useRef<number | undefined>(undefined);
@@ -131,6 +138,19 @@ export default function Home() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // WebRTC Call States
+  const [isInCall, setIsInCall] = useState(false);
+  const [callKind, setCallKind] = useState<"audio" | "video">("video");
+  const [callStatus, setCallStatus] = useState<"calling" | "ringing" | "connected" | "ended">("calling");
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isCamOff, setIsCamOff] = useState(false);
+
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const processedSignalIdsRef = useRef<Set<string>>(new Set());
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+
 
   // Real-time SSE Stream
   const { data: sseData, isConnected: isSseConnected } = useRoomStream({
@@ -187,6 +207,274 @@ export default function Home() {
       toast.success("Guest joined! Chat is ready.");
     }
   }, [room?.participantCount, isQrModalOpen]);
+
+
+  const iceServers: RTCConfiguration = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+    ],
+  };
+
+  const cleanupCall = () => {
+    if (localStream) {
+      localStream.getTracks().forEach((t) => t.stop());
+      setLocalStream(null);
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    setRemoteStream(null);
+    setIsInCall(false);
+    setCallStatus("ended");
+    setIsMicMuted(false);
+    setIsCamOff(false);
+    processedSignalIdsRef.current.clear();
+    pendingIceCandidatesRef.current = [];
+  };
+
+  const handleStartCall = async (kind: "audio" | "video") => {
+    if (!session || !room || room.participantCount < 2) {
+      toast.error("Waiting for someone to join before calling.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: kind === "video",
+      });
+      setLocalStream(stream);
+      setCallKind(kind);
+      setIsInCall(true);
+      setCallStatus("calling");
+
+      await startCallMutation.mutateAsync({
+        roomId: session.roomId,
+        inviteToken: session.inviteToken,
+        memberId: session.memberId,
+        kind,
+      });
+
+      // Initialize RTCPeerConnection
+      const pc = new RTCPeerConnection(iceServers);
+      peerConnectionRef.current = pc;
+
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          setRemoteStream(event.streams[0]);
+          setCallStatus("connected");
+        }
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate && session) {
+          void sendSignalMutation.mutateAsync({
+            roomId: session.roomId,
+            inviteToken: session.inviteToken,
+            memberId: session.memberId,
+            receiverId: "all",
+            type: "ice",
+            payload: JSON.stringify(event.candidate),
+          });
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      await sendSignalMutation.mutateAsync({
+        roomId: session.roomId,
+        inviteToken: session.inviteToken,
+        memberId: session.memberId,
+        receiverId: "all",
+        type: "offer",
+        payload: JSON.stringify(offer),
+      });
+    } catch (err) {
+      toast.error("Camera or microphone permission required for calls.");
+      cleanupCall();
+    }
+  };
+
+  const handleAcceptCall = async () => {
+    if (!session || !room?.call) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: room.call.kind === "video",
+      });
+      setLocalStream(stream);
+      setCallKind(room.call.kind);
+      setIsInCall(true);
+
+      await joinCallMutation.mutateAsync({
+        roomId: session.roomId,
+        inviteToken: session.inviteToken,
+        memberId: session.memberId,
+      });
+
+      const pc = new RTCPeerConnection(iceServers);
+      peerConnectionRef.current = pc;
+
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          setRemoteStream(event.streams[0]);
+          setCallStatus("connected");
+        }
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate && session) {
+          void sendSignalMutation.mutateAsync({
+            roomId: session.roomId,
+            inviteToken: session.inviteToken,
+            memberId: session.memberId,
+            receiverId: room.call?.initiatorId || "all",
+            type: "ice",
+            payload: JSON.stringify(event.candidate),
+          });
+        }
+      };
+
+      // Process pending offer
+      const offerSignal = (room.signals || []).find((s) => s.type === "offer");
+      if (offerSignal) {
+        processedSignalIdsRef.current.add(offerSignal.id);
+        const offerDesc = JSON.parse(offerSignal.payload);
+        await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
+
+        // Flush queued ICE candidates
+        for (const candidate of pendingIceCandidatesRef.current) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+        pendingIceCandidatesRef.current = [];
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        await sendSignalMutation.mutateAsync({
+          roomId: session.roomId,
+          inviteToken: session.inviteToken,
+          memberId: session.memberId,
+          receiverId: room.call.initiatorId,
+          type: "answer",
+          payload: JSON.stringify(answer),
+        });
+        setCallStatus("connected");
+      }
+    } catch (err) {
+      toast.error("Could not access camera/mic to accept call.");
+      handleRejectCall();
+    }
+  };
+
+  const handleRejectCall = async () => {
+    if (!session) return;
+    try {
+      await endCallMutation.mutateAsync({
+        roomId: session.roomId,
+        inviteToken: session.inviteToken,
+        memberId: session.memberId,
+      });
+    } catch {
+      // ignore
+    }
+    cleanupCall();
+  };
+
+  const handleHangup = async () => {
+    if (session) {
+      try {
+        await endCallMutation.mutateAsync({
+          roomId: session.roomId,
+          inviteToken: session.inviteToken,
+          memberId: session.memberId,
+        });
+      } catch {
+        // ignore
+      }
+    }
+    cleanupCall();
+  };
+
+  const toggleMic = () => {
+    if (localStream) {
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMicMuted(!audioTrack.enabled);
+      }
+    }
+  };
+
+  const toggleCam = () => {
+    if (localStream) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsCamOff(!videoTrack.enabled);
+      }
+    }
+  };
+
+  // Process incoming Call signals from Room snapshot
+  useEffect(() => {
+    if (!session || !room) return;
+
+    // Detect incoming call initiation
+    if (room.call && room.call.initiatorId !== session.memberId && !isInCall) {
+      setIsInCall(true);
+      setCallKind(room.call.kind);
+      setCallStatus("ringing");
+    }
+
+    // Detect call ended by remote party
+    if (!room.call && isInCall) {
+      cleanupCall();
+      toast.info("Call ended.");
+    }
+
+    // Handle WebRTC signaling messages
+    if (room.signals && room.signals.length > 0) {
+      room.signals.forEach(async (signal) => {
+        if (processedSignalIdsRef.current.has(signal.id)) return;
+        processedSignalIdsRef.current.add(signal.id);
+
+        const pc = peerConnectionRef.current;
+
+        if (signal.type === "answer" && pc) {
+          try {
+            const answerDesc = JSON.parse(signal.payload);
+            await pc.setRemoteDescription(new RTCSessionDescription(answerDesc));
+            setCallStatus("connected");
+
+            for (const candidate of pendingIceCandidatesRef.current) {
+              await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            }
+            pendingIceCandidatesRef.current = [];
+          } catch (e) {
+            console.error("Error setting remote answer:", e);
+          }
+        } else if (signal.type === "ice") {
+          try {
+            const candidateInit = JSON.parse(signal.payload);
+            if (pc && pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(candidateInit));
+            } else {
+              pendingIceCandidatesRef.current.push(candidateInit);
+            }
+          } catch (e) {
+            console.error("Error adding ice candidate:", e);
+          }
+        }
+      });
+    }
+  }, [room?.call, room?.signals, session, isInCall]);
 
   // Dismiss modals on Escape key
   useEffect(() => {
@@ -1069,6 +1357,24 @@ export default function Home() {
               />
             </div>
           </div>
+        )}
+
+        {isInCall && (
+          <CallModal
+            kind={callKind}
+            partnerAlias={partnerAlias}
+            isInitiator={room?.call?.initiatorId === session.memberId}
+            localStream={localStream}
+            remoteStream={remoteStream}
+            callStatus={callStatus}
+            onAccept={handleAcceptCall}
+            onReject={handleRejectCall}
+            onHangup={handleHangup}
+            onToggleMic={toggleMic}
+            onToggleCam={toggleCam}
+            isMicMuted={isMicMuted}
+            isCamOff={isCamOff}
+          />
         )}
 
         {isEndModalOpen && (

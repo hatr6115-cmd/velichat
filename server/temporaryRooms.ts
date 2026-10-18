@@ -1,3 +1,20 @@
+export type CallSignal = {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  type: 'offer' | 'answer' | 'ice' | 'end';
+  payload: string;
+  timestamp: number;
+};
+
+export type ActiveCall = {
+  initiatorId: string;
+  initiatorAlias: string;
+  kind: 'audio' | 'video';
+  startedAt: number;
+  participants: string[];
+};
+
 import { nanoid } from "nanoid";
 
 export const ROOM_TTL_MS = 30 * 60 * 1000;
@@ -43,6 +60,8 @@ type Room = {
   messages: TemporaryMessage[];
   media: TemporaryMedia[];
   typing: { memberId: string; expiresAt: number }[];
+  call?: ActiveCall;
+  signals: CallSignal[];
 };
 
 export type RoomSnapshot = {
@@ -56,6 +75,8 @@ export type RoomSnapshot = {
   typingAliases: string[];
   messages: TemporaryMessage[];
   media: TemporaryMediaSnapshot[];
+  call?: ActiveCall;
+  signals: CallSignal[];
 };
 
 const rooms = new Map<string, Room>();
@@ -195,6 +216,8 @@ function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
       consumedBy: [...item.consumedBy],
       dataUrl: item.consumedBy.includes(currentMemberId) ? undefined : item.dataUrl,
     })),
+    call: room.call ? { ...room.call, participants: [...room.call.participants] } : undefined,
+    signals: (room.signals || []).filter(s => s.receiverId === currentMemberId || (s.receiverId === 'all' && s.senderId !== currentMemberId)),
   };
 }
 
@@ -213,6 +236,7 @@ export function createTemporaryRoom(aliasInput: string, clientIp = "default") {
     messages: [],
     media: [],
     typing: [],
+    signals: [],
   };
   rooms.set(room.id, room);
   return {
@@ -428,6 +452,13 @@ export function leaveTemporaryRoom(roomId: string, inviteToken: string, memberId
   
   // Actually, if host leaves, should we close the room? Yes.
   // If guest leaves, we could just remove them from the guests array.
+  if (room.call && room.call.participants.includes(memberId)) {
+    room.call.participants = room.call.participants.filter(id => id !== memberId);
+    if (room.call.participants.length === 0 || room.call.initiatorId === memberId) {
+      room.call = undefined;
+      room.signals = [];
+    }
+  }
   if (room.host.id === memberId) {
     notifyRoomSubscribers(roomId, "The host closed the room.");
     rooms.delete(roomId);
@@ -448,4 +479,73 @@ export function clearTemporaryRoomsForTests() {
 export function roomCountForTests() {
   removeExpiredRooms();
   return rooms.size;
+}
+
+export function startTemporaryCall(roomId: string, inviteToken: string, memberId: string, kind: 'audio' | 'video') {
+  const room = requireRoom(roomId, inviteToken);
+  const participant = getParticipant(room, memberId);
+  room.call = {
+    initiatorId: memberId,
+    initiatorAlias: participant.alias,
+    kind,
+    startedAt: Date.now(),
+    participants: [memberId]
+  };
+  room.signals = [];
+  const snap = snapshot(room, memberId);
+  notifyRoomSubscribers(roomId);
+  return snap;
+}
+
+export function joinTemporaryCall(roomId: string, inviteToken: string, memberId: string) {
+  const room = requireRoom(roomId, inviteToken);
+  getParticipant(room, memberId);
+  if (!room.call) throw new Error("No active call in this room.");
+  if (!room.call.participants.includes(memberId)) {
+    room.call.participants.push(memberId);
+  }
+  const snap = snapshot(room, memberId);
+  notifyRoomSubscribers(roomId);
+  return snap;
+}
+
+export function endTemporaryCall(roomId: string, inviteToken: string, memberId: string) {
+  const room = requireRoom(roomId, inviteToken);
+  getParticipant(room, memberId);
+  if (room.call) {
+    room.call.participants = room.call.participants.filter(id => id !== memberId);
+    if (room.call.participants.length === 0 || room.call.initiatorId === memberId) {
+      room.call = undefined;
+      room.signals = [];
+    }
+  }
+  const snap = snapshot(room, memberId);
+  notifyRoomSubscribers(roomId);
+  return snap;
+}
+
+export function sendTemporaryCallSignal(
+  roomId: string,
+  inviteToken: string,
+  memberId: string,
+  receiverId: string,
+  type: 'offer' | 'answer' | 'ice' | 'end',
+  payload: string
+) {
+  const room = requireRoom(roomId, inviteToken);
+  getParticipant(room, memberId);
+  if (!room.signals) room.signals = [];
+  if (room.signals.length > 50) {
+    room.signals = room.signals.slice(-30);
+  }
+  room.signals.push({
+    id: nanoid(10),
+    senderId: memberId,
+    receiverId,
+    type,
+    payload,
+    timestamp: Date.now()
+  });
+  notifyRoomSubscribers(roomId);
+  return { success: true as const };
 }

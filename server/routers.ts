@@ -14,6 +14,10 @@ import {
   sendTemporaryMedia,
   consumeTemporaryMedia,
   setTemporaryTyping,
+  startTemporaryCall,
+  joinTemporaryCall,
+  endTemporaryCall,
+  sendTemporaryCallSignal,
 } from "./temporaryRooms";
 
 const roomInput = z.object({
@@ -64,6 +68,22 @@ export const appRouter = router({
     ),
     leave: publicProcedure.input(roomInput).mutation(({ input }) =>
       leaveTemporaryRoom(input.roomId, input.inviteToken, input.memberId),
+    ),
+    startCall: publicProcedure.input(roomInput.extend({ kind: z.enum(["audio", "video"]) })).mutation(({ input }) =>
+      startTemporaryCall(input.roomId, input.inviteToken, input.memberId, input.kind),
+    ),
+    joinCall: publicProcedure.input(roomInput).mutation(({ input }) =>
+      joinTemporaryCall(input.roomId, input.inviteToken, input.memberId),
+    ),
+    endCall: publicProcedure.input(roomInput).mutation(({ input }) =>
+      endTemporaryCall(input.roomId, input.inviteToken, input.memberId),
+    ),
+    sendSignal: publicProcedure.input(roomInput.extend({
+      receiverId: z.string(),
+      type: z.enum(["offer", "answer", "ice", "end"]),
+      payload: z.string(),
+    })).mutation(({ input }) =>
+      sendTemporaryCallSignal(input.roomId, input.inviteToken, input.memberId, input.receiverId, input.type, input.payload),
     ),
   }),
 });
