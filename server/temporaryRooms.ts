@@ -549,3 +549,17 @@ export function sendTemporaryCallSignal(
   notifyRoomSubscribers(roomId);
   return { success: true as const };
 }
+
+export function extendRoomExpiry(roomId: string, inviteToken: string, memberId: string, additionalMinutes = 15) {
+  const room = requireRoom(roomId, inviteToken);
+  getParticipant(room, memberId);
+  const now = Date.now();
+  // Allow extending if within 10 minutes of expiry or already expired
+  const extensionMs = Math.max(1, Math.min(additionalMinutes, 60)) * 60 * 1000;
+  // Set new expiry capped at now + 2 hours to avoid stale idle rooms
+  room.expiresAt = Math.min(now + 2 * 60 * 60 * 1000, Math.max(room.expiresAt, now) + extensionMs);
+  const snap = snapshot(room, memberId);
+  notifyRoomSubscribers(roomId);
+  return snap;
+}
+

@@ -18,6 +18,7 @@ import {
   joinTemporaryCall,
   endTemporaryCall,
   sendTemporaryCallSignal,
+  extendRoomExpiry,
 } from "./temporaryRooms";
 
 const roomInput = z.object({
@@ -84,6 +85,11 @@ export const appRouter = router({
       payload: z.string(),
     })).mutation(({ input }) =>
       sendTemporaryCallSignal(input.roomId, input.inviteToken, input.memberId, input.receiverId, input.type, input.payload),
+    ),
+    extendExpiry: publicProcedure.input(roomInput.extend({
+      minutes: z.number().min(1).max(60).default(15),
+    })).mutation(({ input }) =>
+      extendRoomExpiry(input.roomId, input.inviteToken, input.memberId, input.minutes),
     ),
   }),
 });

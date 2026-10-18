@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Mic, MicOff, Video, VideoOff, PhoneOff, ShieldCheck, Users } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, PhoneOff, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface CallModalProps {
@@ -20,7 +20,7 @@ interface CallModalProps {
 
 export const CallModal: React.FC<CallModalProps> = ({
   kind,
-  partnerAlias = "Participant",
+  partnerAlias = "PEER",
   isInitiator,
   localStream,
   remoteStream,
@@ -68,37 +68,28 @@ export const CallModal: React.FC<CallModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/90 backdrop-blur-xl animate-in fade-in select-none">
-      <div className="relative flex flex-col w-full max-w-2xl h-[85vh] max-h-[700px] bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
-        {/* Header Bar */}
-        <div className="flex items-center justify-between px-5 py-3.5 bg-slate-900/90 border-b border-slate-800/80 z-20">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/95 font-mono select-none">
+      <div className="relative flex flex-col w-full max-w-xl h-[85vh] max-h-[600px] bg-black border border-green-500/40 rounded-none shadow-[0_0_20px_rgba(34,197,94,0.15)] overflow-hidden">
+        {/* Terminal Header */}
+        <div className="flex items-center justify-between px-3 py-2 bg-black border-b border-green-500/30 text-green-500 text-xs">
           <div className="flex items-center gap-2">
-            <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-400">
-              <ShieldCheck size={16} />
-            </div>
-            <div>
-              <span className="text-xs font-semibold text-white tracking-wide flex items-center gap-1.5">
-                Peer-to-Peer Encrypted {kind === "video" ? "Video" : "Voice"} Call
-              </span>
-              <p className="text-[10px] text-emerald-400 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Anti-Record Protected
-              </p>
-            </div>
+            <span className="w-2 h-2 bg-green-500 animate-pulse" />
+            <span className="tracking-wider uppercase font-bold">
+              [P2P_{kind.toUpperCase()}_STREAM] // NO_RECORD
+            </span>
           </div>
           {callStatus === "connected" && (
-            <div className="px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700/80 text-emerald-400 font-mono text-xs font-semibold">
-              {formatDuration(callDuration)}
+            <div className="text-green-400 font-bold">
+              T+{formatDuration(callDuration)}
             </div>
           )}
         </div>
 
-        {/* Video / Call Stage */}
-        <div className="relative flex-1 bg-slate-950 flex items-center justify-center overflow-hidden">
+        {/* Video / Audio Area */}
+        <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden border-b border-green-500/20">
           {kind === "video" && (
             <>
-              {/* Remote Video Stream (Main) */}
-              <div className="absolute inset-0 flex items-center justify-center bg-slate-950">
+              <div className="absolute inset-0 flex items-center justify-center bg-black">
                 {remoteStream ? (
                   <video
                     ref={remoteVideoRef}
@@ -107,26 +98,25 @@ export const CallModal: React.FC<CallModalProps> = ({
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <div className="flex flex-col items-center gap-3 text-slate-500">
-                    <div className="w-20 h-20 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400 text-2xl font-bold">
-                      {partnerAlias.charAt(0).toUpperCase()}
+                  <div className="flex flex-col items-center gap-2 text-green-500/70 text-xs">
+                    <div className="border border-green-500/40 px-3 py-1 uppercase tracking-widest text-green-400">
+                      {partnerAlias}
                     </div>
-                    <p className="text-xs font-medium">
-                      {callStatus === "calling" ? `Calling ${partnerAlias}…` : `Connecting with ${partnerAlias}…`}
+                    <p className="animate-pulse">
+                      &gt; {callStatus === "calling" ? "DIALING..." : "AWAITING_STREAM..."}
                     </p>
                   </div>
                 )}
               </div>
 
-              {/* Local Video Stream (Picture-in-Picture) */}
               {localStream && !isCamOff && (
-                <div className="absolute top-4 right-4 w-28 h-40 sm:w-36 sm:h-48 rounded-2xl overflow-hidden border-2 border-emerald-500/40 shadow-xl bg-slate-900 z-10">
+                <div className="absolute top-3 right-3 w-24 h-32 sm:w-28 sm:h-36 border border-green-500 bg-black z-10 overflow-hidden">
                   <video
                     ref={localVideoRef}
                     autoPlay
                     playsInline
                     muted
-                    className="w-full h-full object-cover mirror"
+                    className="w-full h-full object-cover"
                   />
                 </div>
               )}
@@ -134,90 +124,77 @@ export const CallModal: React.FC<CallModalProps> = ({
           )}
 
           {kind === "audio" && (
-            <div className="flex flex-col items-center justify-center gap-4 text-center p-6">
-              <div className="relative">
-                <div className="w-28 h-28 rounded-full bg-gradient-to-tr from-emerald-500/20 to-teal-500/10 border-2 border-emerald-500/30 flex items-center justify-center text-emerald-400 text-3xl font-extrabold shadow-2xl">
-                  {partnerAlias.charAt(0).toUpperCase()}
-                </div>
-                {callStatus === "connected" && (
-                  <span className="absolute bottom-1 right-1 w-5 h-5 rounded-full bg-emerald-400 border-4 border-slate-950 animate-pulse" />
-                )}
+            <div className="flex flex-col items-center justify-center gap-3 text-center p-6 text-green-500">
+              <div className="border border-green-500/60 p-4 w-20 h-20 flex items-center justify-center text-xl font-bold">
+                {partnerAlias.slice(0, 4).toUpperCase()}
               </div>
 
-              <div>
-                <h3 className="text-lg font-bold text-white mb-0.5">{partnerAlias}</h3>
-                <p className="text-xs text-slate-400">
-                  {callStatus === "calling" && "Calling…"}
-                  {callStatus === "ringing" && "Incoming Call…"}
-                  {callStatus === "connected" && "Voice Call In Progress"}
-                  {callStatus === "ended" && "Call Ended"}
+              <div className="space-y-1">
+                <div className="text-xs uppercase tracking-widest text-green-400 font-bold">
+                  &gt; {partnerAlias}
+                </div>
+                <p className="text-[11px] text-green-500/60">
+                  {callStatus === "calling" && "STATUS: CALLING..."}
+                  {callStatus === "ringing" && "STATUS: INCOMING_SIGNAL"}
+                  {callStatus === "connected" && "STATUS: ENCRYPTED_AUDIO_ACTIVE"}
+                  {callStatus === "ended" && "STATUS: TERMINATED"}
                 </p>
               </div>
 
-              {/* Hidden audio element to playback remote stream */}
               <audio ref={remoteVideoRef as any} autoPlay playsInline />
             </div>
           )}
         </div>
 
-        {/* Call Action Controls */}
-        <div className="flex items-center justify-center gap-4 px-6 py-5 bg-slate-900/90 border-t border-slate-800/80 z-20">
+        {/* Controls */}
+        <div className="flex items-center justify-center gap-3 px-4 py-3 bg-black text-xs">
           {callStatus === "ringing" && !isInitiator ? (
-            /* Incoming Call Actions: Accept or Decline */
-            <div className="flex items-center gap-6">
-              <Button
+            <div className="flex items-center gap-4">
+              <button
                 onClick={onReject}
-                className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-950/40"
-                aria-label="Decline Call"
+                className="px-4 py-2 border border-red-500 text-red-500 hover:bg-red-500/20 uppercase font-bold"
               >
-                <PhoneOff size={22} />
-              </Button>
-              <Button
+                [REJECT]
+              </button>
+              <button
                 onClick={onAccept}
-                className="w-14 h-14 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-950/40 animate-bounce"
-                aria-label="Accept Call"
+                className="px-4 py-2 border border-green-500 bg-green-500/10 text-green-400 hover:bg-green-500/20 uppercase font-bold animate-pulse"
               >
-                {kind === "video" ? <Video size={22} /> : <Mic size={22} />}
-              </Button>
+                [ACCEPT]
+              </button>
             </div>
           ) : (
-            /* Active / Outgoing Call Controls */
-            <div className="flex items-center gap-3 sm:gap-5">
-              <Button
+            <div className="flex items-center gap-3">
+              <button
                 onClick={onToggleMic}
-                variant="outline"
-                className={`w-12 h-12 rounded-2xl border transition-colors ${
+                className={`px-3 py-1.5 border uppercase font-bold transition-colors ${
                   isMicMuted
-                    ? "bg-red-500/20 border-red-500/40 text-red-400"
-                    : "bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-750"
+                    ? "border-red-500 text-red-500 bg-red-500/10"
+                    : "border-green-500/50 text-green-400 hover:border-green-500"
                 }`}
-                aria-label={isMicMuted ? "Unmute Mic" : "Mute Mic"}
               >
-                {isMicMuted ? <MicOff size={19} /> : <Mic size={19} />}
-              </Button>
+                {isMicMuted ? "[MIC:OFF]" : "[MIC:ON]"}
+              </button>
 
               {kind === "video" && (
-                <Button
+                <button
                   onClick={onToggleCam}
-                  variant="outline"
-                  className={`w-12 h-12 rounded-2xl border transition-colors ${
+                  className={`px-3 py-1.5 border uppercase font-bold transition-colors ${
                     isCamOff
-                      ? "bg-red-500/20 border-red-500/40 text-red-400"
-                      : "bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-750"
+                      ? "border-red-500 text-red-500 bg-red-500/10"
+                      : "border-green-500/50 text-green-400 hover:border-green-500"
                   }`}
-                  aria-label={isCamOff ? "Turn on Camera" : "Turn off Camera"}
                 >
-                  {isCamOff ? <VideoOff size={19} /> : <Video size={19} />}
-                </Button>
+                  {isCamOff ? "[CAM:OFF]" : "[CAM:ON]"}
+                </button>
               )}
 
-              <Button
+              <button
                 onClick={onHangup}
-                className="w-14 h-12 sm:w-16 sm:h-12 rounded-2xl bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-950/50 flex items-center justify-center gap-1.5"
-                aria-label="End Call"
+                className="px-4 py-1.5 border border-red-500 text-red-500 hover:bg-red-500/20 uppercase font-bold"
               >
-                <PhoneOff size={20} />
-              </Button>
+                [HANGUP]
+              </button>
             </div>
           )}
         </div>

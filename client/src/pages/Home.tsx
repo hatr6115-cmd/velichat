@@ -1,4 +1,3 @@
-import { CallModal } from "@/components/CallModal";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -27,6 +26,7 @@ import {
   Volume2,
   Video,
   Phone,
+  PlusCircle,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import { trpc } from "@/lib/trpc";
 import TemporaryQr from "@/components/TemporaryQr";
 import QrScannerModal from "@/components/QrScannerModal";
 import { useRoomStream } from "@/hooks/useRoomStream";
+import { CallModal } from "@/components/CallModal";
 import {
   createTemporaryInvite,
   encodeTemporaryInvite,
@@ -45,18 +46,16 @@ import {
 const aliasPattern = /^[A-Za-z0-9 ._-]{2,32}$/;
 
 const RANDOM_ALIASES = [
-  "SilentFalcon",
-  "VelvetNova",
-  "GhostRider",
-  "EchoMist",
-  "ShadowFox",
-  "LunarNomad",
-  "CyberPulse",
-  "NeonDrifter",
-  "SolarKite",
-  "AstralProwler",
-  "ZenithWalker",
-  "VortexWanderer",
+  "SYS_CORE",
+  "NODE_01",
+  "GHOST_PKT",
+  "HEX_DRIFT",
+  "ZERO_TRACE",
+  "CIPHER_9",
+  "SYN_ACK",
+  "ROOT_DAEMON",
+  "DARK_RELAY",
+  "PULSE_SEC",
 ];
 
 type Session = {
@@ -90,7 +89,7 @@ export default function Home() {
     } catch {
       return {
         invite: null as TemporaryInvite | null,
-        error: "This temporary chat invite is invalid or expired.",
+        error: "ERR: INVITE_TOKEN_INVALID_OR_EXPIRED",
       };
     }
   });
@@ -129,6 +128,7 @@ export default function Home() {
   const joinCallMutation = trpc.temporary.joinCall.useMutation();
   const endCallMutation = trpc.temporary.endCall.useMutation();
   const sendSignalMutation = trpc.temporary.sendSignal.useMutation();
+  const extendExpiryMutation = trpc.temporary.extendExpiry.useMutation();
 
   const typingTimerRef = useRef<number | undefined>(undefined);
   const recordingTimerRef = useRef<number | undefined>(undefined);
@@ -138,6 +138,7 @@ export default function Home() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
   // WebRTC Call States
   const [isInCall, setIsInCall] = useState(false);
   const [callKind, setCallKind] = useState<"audio" | "video">("video");
@@ -151,7 +152,6 @@ export default function Home() {
   const processedSignalIdsRef = useRef<Set<string>>(new Set());
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
-
   // Real-time SSE Stream
   const { data: sseData, isConnected: isSseConnected } = useRoomStream({
     roomId: session?.roomId || "",
@@ -159,7 +159,7 @@ export default function Home() {
     memberId: session?.memberId || "",
     enabled: Boolean(session),
     onClosed: (reason) => {
-      toast.info(reason || "Chat session ended.");
+      toast.info(reason || "SESSION_CLOSED");
       setSession(null);
       setInvite(null);
       setLocation("/");
@@ -200,15 +200,15 @@ export default function Home() {
     }
   }, [room?.messages?.length, room?.media?.length, room?.typingAliases && room.typingAliases.length > 0]);
 
-  // When guest connects, automatically dismiss QR modal and alert host
+  // When guest connects, automatically dismiss QR modal
   useEffect(() => {
     if (room?.participantCount === 2 && isQrModalOpen) {
       setIsQrModalOpen(false);
-      toast.success("Guest joined! Chat is ready.");
+      toast.success("PEER_CONNECTED");
     }
   }, [room?.participantCount, isQrModalOpen]);
 
-
+  // WebRTC ICE Servers
   const iceServers: RTCConfiguration = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
@@ -236,7 +236,7 @@ export default function Home() {
 
   const handleStartCall = async (kind: "audio" | "video") => {
     if (!session || !room || room.participantCount < 2) {
-      toast.error("Waiting for someone to join before calling.");
+      toast.error("AWAITING_PEER_CONNECTION");
       return;
     }
     try {
@@ -256,7 +256,6 @@ export default function Home() {
         kind,
       });
 
-      // Initialize RTCPeerConnection
       const pc = new RTCPeerConnection(iceServers);
       peerConnectionRef.current = pc;
 
@@ -293,8 +292,8 @@ export default function Home() {
         type: "offer",
         payload: JSON.stringify(offer),
       });
-    } catch (err) {
-      toast.error("Camera or microphone permission required for calls.");
+    } catch {
+      toast.error("PERMISSION_DENIED: MEDIA_HARDWARE");
       cleanupCall();
     }
   };
@@ -341,14 +340,12 @@ export default function Home() {
         }
       };
 
-      // Process pending offer
       const offerSignal = (room.signals || []).find((s) => s.type === "offer");
       if (offerSignal) {
         processedSignalIdsRef.current.add(offerSignal.id);
         const offerDesc = JSON.parse(offerSignal.payload);
         await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
 
-        // Flush queued ICE candidates
         for (const candidate of pendingIceCandidatesRef.current) {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         }
@@ -367,8 +364,8 @@ export default function Home() {
         });
         setCallStatus("connected");
       }
-    } catch (err) {
-      toast.error("Could not access camera/mic to accept call.");
+    } catch {
+      toast.error("ERR: FAILED_TO_ACCEPT_CALL");
       handleRejectCall();
     }
   };
@@ -382,7 +379,7 @@ export default function Home() {
         memberId: session.memberId,
       });
     } catch {
-      // ignore
+      /* ignore */
     }
     cleanupCall();
   };
@@ -396,7 +393,7 @@ export default function Home() {
           memberId: session.memberId,
         });
       } catch {
-        // ignore
+        /* ignore */
       }
     }
     cleanupCall();
@@ -422,24 +419,37 @@ export default function Home() {
     }
   };
 
-  // Process incoming Call signals from Room snapshot
+  // Extend Room Time handler
+  const handleExtendRoomTime = async (minutes = 15) => {
+    if (!session) return;
+    try {
+      await extendExpiryMutation.mutateAsync({
+        roomId: session.roomId,
+        inviteToken: session.inviteToken,
+        memberId: session.memberId,
+        minutes,
+      });
+      toast.success(`+${minutes}M ADDED_TO_ROOM`);
+    } catch (err: any) {
+      toast.error(err.message || "ERR_EXTENDING_TIME");
+    }
+  };
+
+  // Process incoming Call signals
   useEffect(() => {
     if (!session || !room) return;
 
-    // Detect incoming call initiation
     if (room.call && room.call.initiatorId !== session.memberId && !isInCall) {
       setIsInCall(true);
       setCallKind(room.call.kind);
       setCallStatus("ringing");
     }
 
-    // Detect call ended by remote party
     if (!room.call && isInCall) {
       cleanupCall();
-      toast.info("Call ended.");
+      toast.info("CALL_TERMINATED");
     }
 
-    // Handle WebRTC signaling messages
     if (room.signals && room.signals.length > 0) {
       room.signals.forEach(async (signal) => {
         if (processedSignalIdsRef.current.has(signal.id)) return;
@@ -458,7 +468,7 @@ export default function Home() {
             }
             pendingIceCandidatesRef.current = [];
           } catch (e) {
-            console.error("Error setting remote answer:", e);
+            console.error("Error setting answer:", e);
           }
         } else if (signal.type === "ice") {
           try {
@@ -469,7 +479,7 @@ export default function Home() {
               pendingIceCandidatesRef.current.push(candidateInit);
             }
           } catch (e) {
-            console.error("Error adding ice candidate:", e);
+            console.error("Error adding ice:", e);
           }
         }
       });
@@ -577,17 +587,17 @@ export default function Home() {
       const parsed = parseTemporaryInvite(invitePayload);
       setInvite(parsed);
       setError("");
-      toast.success(`Found invite from ${parsed.hostAlias}`);
+      toast.success(`INVITE_RESOLVED: ${parsed.hostAlias}`);
     } catch {
-      setError("Scanned code is not a valid VeilChat invitation.");
-      toast.error("Invalid QR code");
+      setError("ERR: INVALID_QR_STREAM");
+      toast.error("INVALID_QR");
     }
   };
 
   async function create() {
     const cleanAlias = validateAlias(alias);
     if (!cleanAlias) {
-      setError("Choose an alias between 2 and 32 characters (letters, numbers, spaces, dots, dashes).");
+      setError("ALIAS_FORMAT_ERR: 2-32 CHARS REQUIRED");
       return;
     }
     setError("");
@@ -606,9 +616,9 @@ export default function Home() {
         alias: result.currentAlias,
         invite: roomInvite,
       });
-      toast.success("Temporary room created");
+      toast.success("ROOM_INITIALIZED");
     } catch (cause: any) {
-      setError(cause instanceof Error ? cause.message : "Could not create the room.");
+      setError(cause instanceof Error ? cause.message : "ERR_ROOM_GEN_FAILED");
     }
   }
 
@@ -616,7 +626,7 @@ export default function Home() {
     if (!invite) return;
     const cleanAlias = validateAlias(alias);
     if (!cleanAlias) {
-      setError("Choose an alias between 2 and 32 characters.");
+      setError("ALIAS_FORMAT_ERR: 2-32 CHARS REQUIRED");
       return;
     }
     setError("");
@@ -633,9 +643,9 @@ export default function Home() {
         alias: result.currentAlias,
         invite,
       });
-      toast.success("Joined room successfully");
+      toast.success("ROOM_ATTACHED");
     } catch (cause: any) {
-      setError(cause instanceof Error ? cause.message : "This invite cannot be joined.");
+      setError(cause instanceof Error ? cause.message : "INVITE_EXPIRED_OR_INVALID");
     }
   }
 
@@ -685,7 +695,7 @@ export default function Home() {
       const objectUrl = URL.createObjectURL(file);
       img.onload = () => {
         URL.revokeObjectURL(objectUrl);
-        const MAX_DIM = 1400;
+        const MAX_DIM = 1200;
         let width = img.naturalWidth || img.width;
         let height = img.naturalHeight || img.height;
         if (width > MAX_DIM || height > MAX_DIM) {
@@ -704,19 +714,19 @@ export default function Home() {
         if (!ctx) {
           const reader = new FileReader();
           reader.onload = () => resolve(String(reader.result));
-          reader.onerror = () => reject(new Error("Could not process photo."));
+          reader.onerror = () => reject(new Error("IMAGE_ERR"));
           reader.readAsDataURL(file);
           return;
         }
         ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
         resolve(dataUrl);
       };
       img.onerror = () => {
         URL.revokeObjectURL(objectUrl);
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("Could not load photo."));
+        reader.onerror = () => reject(new Error("IMAGE_LOAD_ERR"));
         reader.readAsDataURL(file);
       };
       img.src = objectUrl;
@@ -727,7 +737,7 @@ export default function Home() {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(new Error("Could not process media."));
+      reader.onerror = () => reject(new Error("AUDIO_ERR"));
       reader.readAsDataURL(blob);
     });
   }
@@ -745,9 +755,9 @@ export default function Home() {
           dataUrl: selectedPhoto.dataUrl,
         });
         setSelectedPhoto(null);
-        toast.success("View-once photo sent");
+        toast.success("MEDIA_DISPATCHED (VIEW_ONCE)");
       } catch (cause: any) {
-        toast.error(cause instanceof Error ? cause.message : "Failed to send photo");
+        toast.error(cause instanceof Error ? cause.message : "ERR_SENDING_MEDIA");
       }
     }
 
@@ -768,7 +778,7 @@ export default function Home() {
         });
         setMessage("");
       } catch (cause: any) {
-        toast.error(cause instanceof Error ? cause.message : "Failed to send message");
+        toast.error(cause instanceof Error ? cause.message : "ERR_SENDING_PACKET");
       }
     }
   }
@@ -776,7 +786,7 @@ export default function Home() {
   async function startRecording() {
     if (!session || room?.participantCount !== 2) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      toast.error("Audio recording is not supported in this browser.");
+      toast.error("HARDWARE_NOT_SUPPORTED");
       return;
     }
     try {
@@ -807,9 +817,9 @@ export default function Home() {
               kind: "voice",
               dataUrl,
             });
-            toast.success("Voice note sent");
+            toast.success("VOICE_PACKET_SENT");
           } catch (cause: any) {
-            toast.error(cause instanceof Error ? cause.message : "Could not send voice note");
+            toast.error(cause instanceof Error ? cause.message : "VOICE_TRANSMIT_ERR");
           }
         }
       };
@@ -823,7 +833,7 @@ export default function Home() {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
     } catch {
-      toast.error("Microphone access denied or not available.");
+      toast.error("MIC_ACCESS_DENIED");
     }
   }
 
@@ -842,24 +852,17 @@ export default function Home() {
     }
     setIsRecording(false);
     setRecordingSeconds(0);
-    toast.info("Recording cancelled");
+    toast.info("RECORDING_ABORTED");
   }
 
   async function handlePhotoFileSelected(file: File | undefined) {
     if (!file) return;
-    if (
-      !file.type.match(/^image\/(jpeg|png|webp|gif|heic|heif)$/i) &&
-      !file.name.match(/\.(jpe?g|png|webp|gif|heic|heif)$/i)
-    ) {
-      toast.error("Please choose a valid photo (JPG, PNG, WebP, GIF).");
-      return;
-    }
     try {
       const dataUrl = await compressImageFile(file);
       setSelectedPhoto({ file, dataUrl });
-      toast.success("Photo attached (view once)");
+      toast.success("PHOTO_ENCRYPTED_FOR_VIEW_ONCE");
     } catch {
-      toast.error("Failed to process photo.");
+      toast.error("IMAGE_PROCESS_ERR");
     }
   }
 
@@ -913,7 +916,7 @@ export default function Home() {
     setAlias("");
     setIsEndModalOpen(false);
     setLocation("/");
-    toast.success("Room ended and cleared from memory.");
+    toast.success("TERMINATED: MEMORY_PURGED");
   }
 
   if (session) {
@@ -921,116 +924,124 @@ export default function Home() {
     const otherAliases = room ? (session.alias === room.hostAlias 
       ? room.guestAliases 
       : [room.hostAlias, ...(room.guestAliases || []).filter(a => a !== session.alias)]) : [];
-    const partnerAlias = room?.participantCount === 2 ? otherAliases[0] : (room?.participantCount > 2 ? `${room.participantCount - 1} others` : undefined);
-    const isExpired = session.invite.expiresAt <= now;
-    const remainingTime = formatRemaining(session.invite.expiresAt, now);
+    const partnerAlias = room?.participantCount === 2 ? otherAliases[0] : (room?.participantCount > 2 ? `${room.participantCount - 1} NODES` : undefined);
+    const roomExpiresAt = room?.expiresAt || session.invite.expiresAt;
+    const isExpired = roomExpiresAt <= now;
+    const remainingTime = formatRemaining(roomExpiresAt, now);
+    const isAboutToExpire = roomExpiresAt - now <= 5 * 60 * 1000; // <= 5 minutes
 
     return (
-      <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-full max-w-4xl mx-auto bg-slate-950 text-slate-100 antialiased select-none overflow-hidden">
-        {/* Top Navigation Header */}
-        <header className="flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3.5 bg-slate-900/90 border-b border-slate-800/80 backdrop-blur-md z-20 shrink-0">
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <div className="relative shrink-0">
-              <div className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20 text-sm sm:text-base">
-                {room?.participantCount > 2 ? <Users size={20} /> : (partnerAlias ? partnerAlias.charAt(0).toUpperCase() : session.alias.charAt(0).toUpperCase())}
-              </div>
-              <span
-                className={`absolute bottom-0 right-0 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border-2 border-slate-900 ${
-                  connected ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
-                }`}
-              />
-            </div>
+      <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-full max-w-4xl mx-auto bg-black text-green-500 font-mono select-none overflow-hidden">
+        {/* Terminal Header */}
+        <header className="flex items-center justify-between px-3 py-2 bg-black border-b border-green-500/30 z-20 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={`w-2 h-2 ${connected ? "bg-green-500 animate-pulse" : "bg-green-800"}`} />
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                <h2 className="text-xs sm:text-sm font-semibold text-white tracking-wide truncate max-w-[110px] sm:max-w-[200px]">
-                  {connected ? partnerAlias : "Waiting for guest"}
-                </h2>
-                {isSseConnected && (
-                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[9px] sm:text-[10px] font-medium shrink-0">
-                    <Radio size={10} className="animate-pulse" /> Live
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1.5 truncate">
-                <span>You: <strong className="text-slate-300 font-medium">{session.alias}</strong></span>
-                <span>•</span>
-                <span>{connected ? `${room.participantCount} participants` : "1 participant"}</span>
-              </p>
+              <span className="text-xs font-bold uppercase tracking-wider text-green-400 truncate block">
+                &gt; {connected ? partnerAlias : "WAITING_PEER..."}
+              </span>
+              <span className="text-[10px] text-green-700 block">
+                UID: {session.alias} [{connected ? `${room.participantCount}P` : "1P"}]
+              </span>
             </div>
           </div>
 
-          {/* Header Actions */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <div
-              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl border text-[11px] sm:text-xs font-mono font-medium ${
-                session.invite.expiresAt - now < 300_000
-                  ? "bg-red-500/10 border-red-500/30 text-red-400 animate-pulse"
-                  : "bg-slate-800/80 border-slate-700/60 text-slate-300"
-              }`}
-            >
-              <Clock3 size={12} />
-              <span>{isExpired ? "00:00" : remainingTime}</span>
+          {/* Actions */}
+          <div className="flex items-center gap-1.5 shrink-0 text-xs">
+            {/* Expiry Counter & +Time Button */}
+            <div className="flex items-center gap-1">
+              <span
+                className={`px-2 py-0.5 border text-[11px] font-bold ${
+                  isAboutToExpire
+                    ? "border-red-500 text-red-500 animate-pulse"
+                    : "border-green-500/40 text-green-400"
+                }`}
+              >
+                {isExpired ? "00:00" : remainingTime}
+              </span>
+
+              {/* Add Time button - Enabled especially when under 5 minutes */}
+              <button
+                type="button"
+                onClick={() => void handleExtendRoomTime(15)}
+                disabled={extendExpiryMutation.isPending}
+                title="Add 15 minutes to session"
+                className={`px-2 py-0.5 border text-[10px] uppercase font-bold transition-colors ${
+                  isAboutToExpire
+                    ? "border-green-400 bg-green-500/20 text-green-300 animate-bounce"
+                    : "border-green-500/30 text-green-600 hover:text-green-400 hover:border-green-500"
+                }`}
+              >
+                +15M
+              </button>
             </div>
 
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setIsQrModalOpen(true)}
-              className="rounded-xl border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs h-8 sm:h-9 px-2 sm:px-3 gap-1.5"
+            {/* Call Buttons */}
+            <button
+              onClick={() => handleStartCall("audio")}
+              disabled={!connected || isExpired || isInCall}
+              title="Encrypted Audio Call"
+              className="px-2 py-0.5 border border-green-500/50 hover:border-green-400 text-green-400 hover:bg-green-500/10 text-[11px] disabled:opacity-30 uppercase"
             >
-              <QrCode size={14} className="text-emerald-400" />
-              <span className="hidden sm:inline">Invite QR</span>
-            </Button>
+              [CALL]
+            </button>
 
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setIsEndModalOpen(true)}
-              className="rounded-xl border-red-500/30 hover:bg-red-500/10 hover:border-red-500/50 text-red-400 text-xs h-8 sm:h-9 px-2 sm:px-3 gap-1.5"
+            <button
+              onClick={() => handleStartCall("video")}
+              disabled={!connected || isExpired || isInCall}
+              title="Encrypted Video Call"
+              className="px-2 py-0.5 border border-green-500/50 hover:border-green-400 text-green-400 hover:bg-green-500/10 text-[11px] disabled:opacity-30 uppercase"
             >
-              <LogOut size={14} />
-              <span className="hidden sm:inline">End Chat</span>
-            </Button>
+              [VID]
+            </button>
+
+            <button
+              onClick={() => setIsQrModalOpen(true)}
+              className="px-2 py-0.5 border border-green-500/50 hover:border-green-400 text-green-400 hover:bg-green-500/10 text-[11px] uppercase"
+            >
+              [QR]
+            </button>
+
+            <button
+              onClick={() => setIsEndModalOpen(true)}
+              className="px-2 py-0.5 border border-red-500/60 hover:border-red-400 text-red-500 hover:bg-red-500/10 text-[11px] uppercase"
+            >
+              [EXIT]
+            </button>
           </div>
         </header>
 
-        {/* Message Stream */}
+        {/* Message Feed */}
         <main
           ref={messageListRef}
-          className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 space-y-3.5 bg-gradient-to-b from-slate-950 via-slate-900/30 to-slate-950 overscroll-contain"
+          className="flex-1 overflow-y-auto p-3 space-y-2 bg-black overscroll-contain text-xs"
         >
           {!connected && (
-            <div className="flex flex-col items-center justify-center p-8 text-center bg-slate-900/50 border border-slate-800/80 rounded-3xl max-w-md mx-auto my-6 backdrop-blur-sm">
-              <div className="flex items-center justify-center w-14 h-14 mb-4 rounded-2xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <Users size={28} />
-              </div>
-              <h3 className="text-base font-semibold text-white mb-1">Waiting for your guest to join</h3>
-              <p className="text-xs text-slate-400 mb-5 max-w-xs leading-relaxed">
-                Share this temporary invite link or show the QR code. Only one person can enter.
-              </p>
-              <div className="flex gap-2 w-full max-w-xs">
-                <Button
+            <div className="border border-dashed border-green-500/30 p-6 text-center max-w-sm mx-auto my-8">
+              <p className="text-green-400 font-bold uppercase mb-2">&gt; AWAITING_PEER_CONNECTION</p>
+              <p className="text-[11px] text-green-700 mb-4">SHARE_INVITE_TOKEN_OR_SCAN_MATRIX</p>
+              <div className="flex gap-2 justify-center">
+                <button
                   onClick={() => setIsQrModalOpen(true)}
-                  className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs h-9 gap-1.5 shadow-lg shadow-emerald-950/40"
+                  className="px-3 py-1.5 border border-green-500 bg-green-500/10 text-green-400 text-xs uppercase hover:bg-green-500/20"
                 >
-                  <QrCode size={14} /> Show QR Code
-                </Button>
-                <Button
+                  [SHOW_QR]
+                </button>
+                <button
                   onClick={() => {
                     navigator.clipboard.writeText(inviteUrl);
-                    toast.success("Invite link copied");
+                    toast.success("TOKEN_COPIED");
                   }}
-                  variant="outline"
-                  className="rounded-xl border-slate-700 bg-slate-800 text-slate-200 text-xs h-9 px-3 gap-1.5"
+                  className="px-3 py-1.5 border border-green-500/50 text-green-500 text-xs uppercase hover:border-green-400"
                 >
-                  <Copy size={14} /> Copy
-                </Button>
+                  [COPY_LINK]
+                </button>
               </div>
             </div>
           )}
 
           {(room?.messages && room.messages.length > 0) || (room?.media && room.media.length > 0) ? (
-            <div className="space-y-3.5 max-w-2xl mx-auto">
+            <div className="space-y-2 max-w-3xl mx-auto">
               {room?.messages?.map((item) => {
                 const isOwn = item.memberId === session.memberId;
                 return (
@@ -1042,37 +1053,27 @@ export default function Home() {
                     }}
                     className={`flex flex-col ${isOwn ? "items-end" : "items-start"}`}
                   >
-                    <div className="text-[11px] font-medium text-slate-400 mb-1 px-1 flex items-center gap-1.5">
-                      <span>{isOwn ? "You" : item.alias}</span>
-                      <span>•</span>
-                      <span className="text-slate-400">
-                        {new Date(item.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </span>
+                    <div className="text-[10px] text-green-700 mb-0.5">
+                      [{new Date(item.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}] {isOwn ? "LOCAL" : item.alias}
                     </div>
 
                     <div
-                      className={`relative max-w-[85%] sm:max-w-md px-4 py-2.5 rounded-2xl text-sm leading-relaxed break-words shadow-sm ${
+                      className={`max-w-[88%] p-2 border ${
                         isOwn
-                          ? "bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-tr-xs shadow-emerald-950/20"
-                          : "bg-slate-800/90 text-slate-100 border border-slate-700/60 rounded-tl-xs"
+                          ? "bg-black border-green-500/80 text-green-400 shadow-[0_0_8px_rgba(34,197,94,0.1)]"
+                          : "bg-black border-green-900 text-green-300"
                       }`}
                     >
-                      <p className="whitespace-pre-wrap">{item.body}</p>
+                      <p className="whitespace-pre-wrap leading-relaxed">{item.body}</p>
 
                       {isOwn && (
-                        <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-emerald-200/80 font-mono">
+                        <div className="text-[9px] text-green-700 text-right mt-1">
                           {item.readBy.length >= room.participantCount - 1 && room.participantCount > 1 ? (
-                            <span className="flex items-center gap-0.5 text-cyan-300 font-semibold" title="Read by partner">
-                              <CheckCheck size={13} /> Read
-                            </span>
+                            <span className="text-green-400">[ACK:READ]</span>
                           ) : item.deliveredTo.length > 0 ? (
-                            <span className="flex items-center gap-0.5 text-emerald-200" title="Delivered to partner">
-                              <CheckCheck size={13} /> Delivered
-                            </span>
+                            <span className="text-green-600">[ACK:DELIVERED]</span>
                           ) : (
-                            <span className="flex items-center gap-0.5 text-emerald-300/80" title="Sent to room">
-                              <Check size={13} /> Sent
-                            </span>
+                            <span className="text-green-800">[TRANSMITTED]</span>
                           )}
                         </div>
                       )}
@@ -1085,157 +1086,92 @@ export default function Home() {
                 const isOwn = item.memberId === session.memberId;
                 const isConsumed =
                   consumedMediaIds.has(item.id) ||
-                  (item.consumedBy && item.consumedBy && item.consumedBy.includes(session.memberId)) ||
+                  (item.consumedBy && item.consumedBy.includes(session.memberId)) ||
                   !item.dataUrl;
 
                 return (
                   <div key={item.id} className={`flex flex-col ${isOwn ? "items-end" : "items-start"}`}>
-                    <div className="text-[11px] font-medium text-slate-400 mb-1 px-1 flex items-center gap-1.5">
-                      <span>{isOwn ? "You" : item.alias}</span>
-                      <span>•</span>
-                      <span className="text-emerald-400 font-semibold">
-                        {item.kind === "voice" ? "VOICE NOTE" : "VIEW-ONCE PHOTO"}
-                      </span>
+                    <div className="text-[10px] text-green-700 mb-0.5">
+                      [{new Date(item.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}] {isOwn ? "LOCAL" : item.alias} : {item.kind.toUpperCase()}
                     </div>
 
-                    <div
-                      className={`p-3 sm:p-3.5 rounded-2xl max-w-[85%] sm:max-w-sm border ${
-                        isOwn
-                          ? "bg-slate-900 border-emerald-500/30 text-slate-100"
-                          : "bg-slate-800/90 border-slate-700/80 text-slate-100"
-                      }`}
-                    >
+                    <div className="p-2 border border-green-500/50 bg-black text-xs">
                       {item.kind === "voice" ? (
                         isConsumed ? (
-                          <div className="flex items-center gap-2.5 text-xs text-slate-400 py-1">
-                            <Volume2 size={16} className="text-slate-400" />
-                            <span>Voice note played once</span>
-                          </div>
+                          <span className="text-green-800">[VOICE_PACKET_CONSUMED]</span>
                         ) : (
-                          <div className="flex flex-col gap-1.5 py-0.5 min-w-[180px] sm:min-w-[240px]">
+                          <div className="flex flex-col gap-1 min-w-[200px]">
                             <audio
                               controls
                               controlsList="nodownload"
                               playsInline
                               preload="auto"
                               src={item.dataUrl}
-                              className="w-full h-8 accent-emerald-500 rounded-lg"
+                              className="w-full h-7 invert"
                               onEnded={() => {
                                 if (!isOwn) void consumeMediaOnce(item.id);
                               }}
                             />
                             {!isOwn && (
-                              <span className="text-[10px] text-slate-400 px-1">
-                                Plays once • Vanishes when finished
-                              </span>
+                              <span className="text-[9px] text-green-700">&gt; PLAYS_ONCE // AUTO_PURGE</span>
                             )}
                           </div>
                         )
                       ) : isConsumed ? (
-                        <div className="flex items-center gap-2.5 text-xs text-slate-400 py-1">
-                          <Eye size={16} className="text-slate-400" />
-                          <span>Photo viewed once</span>
-                        </div>
+                        <span className="text-green-800">[IMAGE_PACKET_PURGED]</span>
                       ) : (
-                        <Button
+                        <button
                           onClick={() => openViewOncePhoto(item)}
-                          className="w-full rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs h-10 gap-2 shadow-md"
+                          className="px-3 py-1.5 border border-green-500 bg-green-500/10 text-green-400 uppercase font-bold hover:bg-green-500/20 text-xs"
                         >
-                          <Flame size={16} className="text-amber-300" /> View once photo
-                        </Button>
+                          [VIEW_IMAGE_ONCE]
+                        </button>
                       )}
                     </div>
                   </div>
                 );
               })}
             </div>
-          ) : (
-            connected && (
-              <div className="flex flex-col items-center justify-center h-48 text-center text-slate-400">
-                <Sparkles size={24} className="text-emerald-400 mb-2 animate-bounce" />
-                <p className="text-xs font-medium text-slate-300">Connected with {partnerAlias}</p>
-                <p className="text-[11px] text-slate-400">Say hello to start the ephemeral conversation.</p>
-              </div>
-            )
-          )}
+          ) : null}
 
           {room?.typingAliases && room.typingAliases.length > 0 && (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/80 border border-slate-800 text-xs text-emerald-400 w-fit animate-pulse">
-              <span className="flex gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" />
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce delay-100" />
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce delay-200" />
-              </span>
-              <span>{room.typingAlias} is typing…</span>
+            <div className="text-[10px] text-green-500 animate-pulse">
+              &gt; {room.typingAliases.join(", ")} TYPING...
             </div>
           )}
         </main>
 
+        {/* Floating preview for selected photo */}
         {selectedPhoto && (
-          <div className="flex items-center justify-between px-5 py-2.5 bg-slate-900 border-t border-slate-800">
-            <div className="flex items-center gap-3">
-              <img
-                src={selectedPhoto.dataUrl}
-                alt="Selected preview"
-                className="w-12 h-12 object-cover rounded-xl border border-slate-700"
-              />
-              <div>
-                <p className="text-xs font-medium text-slate-200">View-Once Photo Attached</p>
-                <p className="text-[11px] text-slate-400">Recipient can only view it once.</p>
-              </div>
-            </div>
+          <div className="flex items-center justify-between px-3 py-1.5 bg-black border-t border-green-500/40 text-xs">
+            <span className="text-green-400">&gt; ATTACHED_IMAGE [VIEW_ONCE]</span>
             <button
               onClick={() => setSelectedPhoto(null)}
-              className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-slate-800"
+              className="text-red-500 hover:text-red-400 font-bold"
             >
-              <X size={16} />
+              [X]
             </button>
           </div>
         )}
 
-        {/* Bottom Floating Composer */}
-        <footer className="p-2.5 sm:p-4 bg-slate-900/90 border-t border-slate-800/80 backdrop-blur-md shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        {/* Input Bar */}
+        <footer className="p-2 bg-black border-t border-green-500/30 shrink-0">
           {isRecording ? (
-            <div className="flex items-center justify-between gap-2 sm:gap-3 p-2 bg-slate-950 border border-red-500/30 rounded-2xl shadow-inner max-w-3xl mx-auto w-full">
-              <div className="flex items-center gap-2 sm:gap-3 pl-2 sm:pl-3 min-w-0">
-                <span className="flex h-3 w-3 relative shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
-                </span>
-                <span className="text-xs font-mono font-medium text-red-400 truncate">
-                  Recording {String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:
-                  {String(recordingSeconds % 60).padStart(2, "0")}
-                </span>
-
-                <div className="hidden sm:flex items-center gap-1">
-                  <div className="w-1 bg-red-400 rounded-full animate-wave-1" />
-                  <div className="w-1 bg-red-400 rounded-full animate-wave-2" />
-                  <div className="w-1 bg-red-400 rounded-full animate-wave-3" />
-                  <div className="w-1 bg-red-400 rounded-full animate-wave-4" />
-                  <div className="w-1 bg-red-400 rounded-full animate-wave-5" />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={cancelRecording}
-                  className="rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 text-xs h-9 px-2.5 sm:px-3 gap-1"
-                >
-                  <X size={15} /> <span className="hidden sm:inline">Cancel</span>
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={stopAndSendRecording}
-                  className="rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs h-9 px-3 sm:px-4 gap-1.5 shadow-md shadow-red-950/40"
-                >
-                  <Send size={14} /> Send
-                </Button>
+            <div className="flex items-center justify-between gap-2 p-1.5 border border-red-500 text-red-500 text-xs">
+              <span className="animate-pulse">
+                ● REC {String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:{String(recordingSeconds % 60).padStart(2, "0")}
+              </span>
+              <div className="flex gap-2">
+                <button onClick={cancelRecording} className="px-2 py-0.5 border border-red-500 hover:bg-red-500/20 uppercase">
+                  [ABORT]
+                </button>
+                <button onClick={stopAndSendRecording} className="px-2 py-0.5 border border-green-500 text-green-400 hover:bg-green-500/20 uppercase">
+                  [SEND]
+                </button>
               </div>
             </div>
           ) : (
-            <div className="flex items-end gap-1.5 sm:gap-2 max-w-3xl mx-auto w-full">
+            <div className="flex items-center gap-1.5 max-w-3xl mx-auto w-full">
               <input
                 id="photo-upload-input"
                 type="file"
@@ -1246,119 +1182,74 @@ export default function Home() {
                   e.currentTarget.value = "";
                 }}
               />
-              <Button
+              <button
                 type="button"
-                variant="outline"
-                size="icon"
                 disabled={!connected || isExpired}
                 onClick={() => document.getElementById("photo-upload-input")?.click()}
-                className="rounded-2xl h-10 w-10 sm:h-11 sm:w-11 shrink-0 border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-emerald-400"
-                aria-label="Attach view-once photo"
+                className="px-2 py-1.5 border border-green-500/40 text-green-500 hover:border-green-400 hover:text-green-300 disabled:opacity-30 uppercase text-xs"
+                title="Attach View-Once Photo"
               >
-                <Camera size={18} />
-              </Button>
+                [IMG]
+              </button>
 
-              <Button
+              <button
                 type="button"
-                variant="outline"
-                size="icon"
                 disabled={!connected || isExpired}
                 onClick={startRecording}
-                className="rounded-2xl h-10 w-10 sm:h-11 sm:w-11 shrink-0 border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-emerald-400"
-                aria-label="Record voice note"
+                className="px-2 py-1.5 border border-green-500/40 text-green-500 hover:border-green-400 hover:text-green-300 disabled:opacity-30 uppercase text-xs"
+                title="Record Ephemeral Audio"
               >
-                <Mic size={18} />
-              </Button>
+                [MIC]
+              </button>
 
-              <div className="flex-1 min-w-0 relative">
-                <textarea
-                  ref={textareaRef}
+              <div className="flex-1 min-w-0 relative flex items-center">
+                <span className="text-green-600 mr-1.5">&gt;</span>
+                <input
+                  ref={textareaRef as any}
                   value={message}
                   onChange={(e) => handleMessageChange(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    if (e.key === "Enter") {
                       e.preventDefault();
                       void send();
                     }
                   }}
                   disabled={!connected || isExpired}
-                  placeholder={
-                    isExpired
-                      ? "Room has expired"
-                      : connected
-                      ? "Write a temporary message…"
-                      : "Waiting for guest to join…"
-                  }
-                  rows={1}
-                  className="w-full px-3.5 sm:px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40 text-slate-100 placeholder-slate-500 text-sm resize-none max-h-32 transition-colors outline-none leading-relaxed"
+                  placeholder={connected ? "type packet..." : "awaiting peer..."}
+                  className="w-full bg-black border border-green-500/40 focus:border-green-400 px-2 py-1 text-xs text-green-400 placeholder-green-800 outline-none font-mono"
                 />
               </div>
 
-              <Button
+              <button
                 onClick={() => void send()}
                 disabled={!connected || isExpired || (!message.trim() && !selectedPhoto)}
-                className="rounded-2xl h-10 w-10 sm:h-11 sm:w-11 shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40 disabled:bg-slate-800 shadow-md shadow-emerald-950/30"
-                aria-label="Send message"
+                className="px-3 py-1 border border-green-500 bg-green-500/10 text-green-400 hover:bg-green-500/20 disabled:opacity-30 uppercase text-xs font-bold"
               >
-                <Send size={17} />
-              </Button>
+                [SEND]
+              </button>
             </div>
           )}
         </footer>
 
+        {/* View Once Photo Overlay */}
         {activePhoto && (
           <div
-            className="fixed inset-0 z-50 flex flex-col items-center justify-center p-4 bg-black/95 backdrop-blur-md animate-in fade-in"
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center p-4 bg-black/98"
             onClick={() => setActivePhoto(null)}
           >
-            <div className="flex items-center justify-between w-full max-w-lg mb-3 px-2 text-white">
-              <div className="flex items-center gap-2 text-xs font-semibold text-amber-400">
-                <Flame size={16} /> View Once • Closes in {photoCountdown}s
-              </div>
-              <button
-                onClick={() => setActivePhoto(null)}
-                className="p-1.5 rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-300"
-              >
-                <X size={18} />
+            <div className="flex items-center justify-between w-full max-w-md mb-2 text-green-500 text-xs">
+              <span className="animate-pulse">&gt; VIEW_ONCE: CLOSES_IN_{photoCountdown}S</span>
+              <button onClick={() => setActivePhoto(null)} className="text-red-500 font-bold">
+                [CLOSE]
               </button>
             </div>
-
-            <div className="relative max-w-full max-h-[78vh] overflow-hidden rounded-2xl border border-slate-800 shadow-2xl">
-              <img
-                src={activePhoto}
-                alt="View-once temporary shared photo"
-                className="max-h-[75vh] w-auto object-contain rounded-2xl"
-              />
-            </div>
-            <p className="text-xs text-slate-400 mt-3">Tap anywhere to close</p>
-          </div>
-        )}
-
-        {isQrModalOpen && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in"
-            onClick={(e) => {
-              if (e.target === e.currentTarget) setIsQrModalOpen(false);
-            }}
-          >
-            <div className="relative w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl">
-              <button
-                type="button"
-                onClick={() => setIsQrModalOpen(false)}
-                className="absolute top-4 right-4 z-10 p-2 rounded-full text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-800 transition-colors"
-                aria-label="Back to chat"
-              >
-                <X size={18} />
-              </button>
-              <TemporaryQr
-                inviteUrl={inviteUrl}
-                inline={true}
-                onClose={() => setIsQrModalOpen(false)}
-              />
+            <div className="border border-green-500/50 max-h-[75vh] overflow-hidden">
+              <img src={activePhoto} alt="Ephemeral packet" className="max-h-[70vh] object-contain" />
             </div>
           </div>
         )}
 
+        {/* Call Modal */}
         {isInCall && (
           <CallModal
             kind={callKind}
@@ -1377,30 +1268,58 @@ export default function Home() {
           />
         )}
 
-        {isEndModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
-            <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl text-center">
-              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-full bg-red-500/10 text-red-400">
-                <LogOut size={24} />
+        {/* QR Invite Modal */}
+        {isQrModalOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 font-mono"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setIsQrModalOpen(false);
+            }}
+          >
+            <div className="relative w-full max-w-xs bg-black border border-green-500 p-5 text-center">
+              <div className="flex justify-between items-center mb-3 text-xs text-green-500">
+                <span className="font-bold">&gt; PEER_QR_TOKEN</span>
+                <button
+                  type="button"
+                  onClick={() => setIsQrModalOpen(false)}
+                  className="text-red-500 font-bold"
+                >
+                  [X]
+                </button>
               </div>
-              <h3 className="text-base font-bold text-white mb-1">End Temporary Chat?</h3>
-              <p className="text-xs text-slate-400 mb-5 leading-relaxed">
-                Ending this chat will immediately disconnect both participants and permanently clear all messages from server memory.
+              <div className="p-2 bg-white inline-block">
+                <TemporaryQr
+                  inviteUrl={inviteUrl}
+                  inline={true}
+                  onClose={() => setIsQrModalOpen(false)}
+                />
+              </div>
+              <p className="text-[10px] text-green-700 mt-3">&gt; SCAN_TO_ATTACH_PEER</p>
+            </div>
+          </div>
+        )}
+
+        {/* End Room Modal */}
+        {isEndModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 font-mono">
+            <div className="w-full max-w-sm bg-black border border-red-500 p-5 text-center space-y-3">
+              <p className="text-red-500 font-bold text-sm">&gt; PURGE_SESSION_DATA?</p>
+              <p className="text-xs text-green-800">
+                IMMEDIATE_DISCONNECT // ZERO_MEMORY_PERSISTENCE
               </p>
-              <div className="flex gap-2.5">
-                <Button
-                  variant="outline"
+              <div className="flex gap-3 justify-center pt-2">
+                <button
                   onClick={() => setIsEndModalOpen(false)}
-                  className="flex-1 rounded-xl border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-300 text-xs h-10"
+                  className="px-3 py-1.5 border border-green-500 text-green-500 text-xs uppercase"
                 >
-                  Keep Chatting
-                </Button>
-                <Button
+                  [CANCEL]
+                </button>
+                <button
                   onClick={endRoom}
-                  className="flex-1 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs h-10 shadow-lg shadow-red-950/40"
+                  className="px-3 py-1.5 border border-red-500 bg-red-500/10 text-red-500 hover:bg-red-500/20 text-xs uppercase font-bold"
                 >
-                  End Chat Now
-                </Button>
+                  [CONFIRM_PURGE]
+                </button>
               </div>
             </div>
           </div>
@@ -1412,142 +1331,82 @@ export default function Home() {
   const isJoin = Boolean(invite);
 
   return (
-    <div className="min-h-[100dvh] bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-emerald-500/30 selection:text-emerald-200 overflow-x-hidden">
-      <header className="flex items-center justify-between max-w-5xl w-full mx-auto px-4 sm:px-6 py-4 sm:py-5">
-        <a href="/" className="flex items-center gap-2.5 text-white font-bold text-base sm:text-lg tracking-tight group">
-          <div className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 group-hover:scale-105 transition-transform">
-            <MessageSquare size={17} />
-          </div>
-          <span>Veil<span className="text-emerald-400 font-extrabold">Chat</span></span>
-        </a>
-
-        <div className="flex items-center gap-2 sm:gap-3">
-          <button
-            onClick={() => setIsScannerOpen(true)}
-            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-medium text-slate-300 hover:text-white transition-all shadow-sm"
-          >
-            <Camera size={14} className="text-emerald-400" />
-            <span>Scan QR</span>
-          </button>
-          <div className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-medium border border-emerald-500/20">
-            <ShieldCheck size={13} /> Zero-Trace
-          </div>
+    <div className="min-h-[100dvh] bg-black text-green-500 font-mono flex flex-col justify-between p-4 selection:bg-green-500 selection:text-black">
+      {/* Terminal Topline */}
+      <header className="flex items-center justify-between max-w-xl w-full mx-auto py-2 border-b border-green-500/30 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 bg-green-500 animate-pulse" />
+          <span className="font-bold tracking-widest text-green-400">VEILCHAT // TERMINAL_V2</span>
         </div>
+        <button
+          onClick={() => setIsScannerOpen(true)}
+          className="border border-green-500/50 px-2 py-0.5 text-[11px] text-green-400 hover:bg-green-500/10 uppercase"
+        >
+          [SCAN_QR]
+        </button>
       </header>
 
-      <main className="max-w-md w-full mx-auto px-4 sm:px-5 py-6 sm:py-8 my-auto">
-        <div className="text-center mb-7">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 mb-3 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
-            <Sparkles size={13} /> 2 People • 30 Minutes • No Accounts
+      {/* Main Terminal Form */}
+      <main className="max-w-sm w-full mx-auto my-auto py-6">
+        <div className="border border-green-500/50 p-5 bg-black shadow-[0_0_15px_rgba(34,197,94,0.1)] space-y-4">
+          <div className="text-xs text-green-600 border-b border-green-500/20 pb-2">
+            &gt; ZERO_TRACE_IN_MEMORY_STREAM<br />
+            &gt; ENCRYPTION: DTLS-SRTP_P2P<br />
+            &gt; STORAGE: NULL
           </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-            Chat that leaves <em className="not-italic text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-300">no trace.</em>
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-400 mt-2 max-w-xs mx-auto">
-            Choose a nickname, share a one-time link or QR code, and chat privately in server memory.
-          </p>
-        </div>
 
-        <div className="p-6 bg-slate-900/90 border border-slate-800 rounded-3xl shadow-2xl backdrop-blur-xl">
           {isJoin && (
-            <div className="p-4 mb-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-left">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider">
-                  Joining Room
-                </span>
-                <span className="flex items-center gap-1 text-xs text-slate-300 font-mono">
-                  <Clock3 size={12} /> {invite && formatRemaining(invite.expiresAt, now)}
-                </span>
-              </div>
-              <p className="text-sm font-semibold text-white">
-                Host: <strong className="text-emerald-300">{invite?.hostAlias}</strong>
-              </p>
+            <div className="p-2 border border-green-500/30 text-xs space-y-1">
+              <div className="text-green-400 font-bold">&gt; ATTACHING_TO_ROOM</div>
+              <div className="text-[11px] text-green-700">HOST: {invite?.hostAlias}</div>
             </div>
           )}
 
-          <div className="space-y-4">
-            <div>
-              <div className="flex items-center justify-between mb-1.5 px-1">
-                <label htmlFor="alias-input" className="text-xs font-semibold text-slate-300">
-                  YOUR ALIAS (NICKNAME)
-                </label>
-                <button
-                  type="button"
-                  onClick={generateRandomAlias}
-                  className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300 font-medium transition-colors"
-                >
-                  <Dice5 size={13} /> Random
-                </button>
-              </div>
-
-              <Input
-                id="alias-input"
-                value={alias}
-                onChange={(e) => setAlias(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void (isJoin ? join() : create());
-                }}
-                placeholder="e.g. ShadowFox"
-                maxLength={32}
-                autoComplete="off"
-                className="h-12 rounded-xl bg-slate-950/80 border-slate-800 focus:border-emerald-500 focus:ring-emerald-500/30 text-white placeholder-slate-500 text-sm font-medium"
-              />
-              <p className="text-[11px] text-slate-400 mt-1.5 px-1">
-                2–32 characters • Visible only inside this chat room
-              </p>
-            </div>
-
-            {error && (
-              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
-                {error}
-              </div>
-            )}
-
-            <Button
-              onClick={() => void (isJoin ? join() : create())}
-              disabled={createRoom.isPending || joinRoom.isPending || !alias.trim()}
-              className="w-full h-12 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-sm shadow-lg shadow-emerald-950/40 transition-all hover:scale-[1.01] active:scale-[0.99]"
-            >
-              {isJoin ? "Join Temporary Room" : "Create Temporary Room"}
-            </Button>
-          </div>
-
-          {!isJoin && (
-            <div className="mt-4 pt-4 border-t border-slate-800/80 text-center">
+          <div className="space-y-2">
+            <div className="flex justify-between text-xs text-green-600">
+              <label htmlFor="alias-input">&gt; CALLSIGN (ALIAS)</label>
               <button
                 type="button"
-                onClick={() => setIsScannerOpen(true)}
-                className="inline-flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-emerald-400 transition-colors"
+                onClick={generateRandomAlias}
+                className="text-green-400 hover:underline"
               >
-                <QrCode size={15} /> Have an invite? Scan QR Code
+                [RND]
               </button>
             </div>
-          )}
-        </div>
 
-        <div className="grid grid-cols-3 gap-2.5 mt-6 text-center">
-          <div className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800/60">
-            <Users size={16} className="mx-auto text-emerald-400 mb-1" />
-            <p className="text-xs font-semibold text-white">2 People</p>
-            <p className="text-[10px] text-slate-400">Host & guest</p>
+            <input
+              id="alias-input"
+              value={alias}
+              onChange={(e) => setAlias(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void (isJoin ? join() : create());
+              }}
+              placeholder="e.g. NODE_01"
+              maxLength={32}
+              autoComplete="off"
+              className="w-full bg-black border border-green-500 px-3 py-2 text-green-400 placeholder-green-800 text-xs font-mono outline-none focus:ring-1 focus:ring-green-400"
+            />
           </div>
-          <div className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800/60">
-            <Clock3 size={16} className="mx-auto text-emerald-400 mb-1" />
-            <p className="text-xs font-semibold text-white">30 Mins</p>
-            <p className="text-[10px] text-slate-400">Auto-expires</p>
-          </div>
-          <div className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800/60">
-            <ShieldCheck size={16} className="mx-auto text-emerald-400 mb-1" />
-            <p className="text-xs font-semibold text-white">In-Memory</p>
-            <p className="text-[10px] text-slate-400">Zero DB storage</p>
-          </div>
+
+          {error && (
+            <div className="p-2 border border-red-500/60 text-red-500 text-[11px]">
+              &gt; {error}
+            </div>
+          )}
+
+          <button
+            onClick={() => void (isJoin ? join() : create())}
+            disabled={createRoom.isPending || joinRoom.isPending || !alias.trim()}
+            className="w-full py-2 border border-green-400 bg-green-500/10 text-green-300 hover:bg-green-500/20 text-xs uppercase font-bold tracking-wider disabled:opacity-30 transition-all"
+          >
+            {isJoin ? "[ATTACH_TO_ROOM]" : "[INITIALIZE_ROOM]"}
+          </button>
         </div>
       </main>
 
-      <footer className="max-w-md mx-auto px-6 py-4 text-center text-[11px] text-slate-400">
-        <p>
-          Privacy note: Room state exists in server memory and auto-purges on expiry or exit.
-        </p>
+      {/* Terminal Footer */}
+      <footer className="text-center text-[10px] text-green-800 py-2">
+        VEILCHAT_CORE // NO_LOGS // NO_STORAGE // EPHEMERAL
       </footer>
 
       <QrScannerModal
