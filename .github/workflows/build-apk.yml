@@ -1,0 +1,57 @@
+name: Build VeilChat Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Secure Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java Development Kit (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          gradle assembleDebug --stacktrace
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VeilChat-Secure-v1.0.0
+          path: android/app/build/outputs/apk/debug/*.apk
+
+      - name: Create Release with APK
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: v1.0.0-apk
+          name: "VeilChat Android APK (FLAG_SECURE Privacy Build)"
+          body: |
+            ### 🛡️ VeilChat Secure Android APK
+            
+            This Android build enforces system-level privacy:
+            - **Screenshot Blocking**: Screen captures are denied by Android OS.
+            - **Screen Recording Protection**: Third-party screen recorders and system recorders only record a blank black screen.
+            - **App Switcher Privacy**: Multitasking preview thumbnail is obscured so sensitive chat rooms cannot be peeked at.
+            - **Camera & Mic Support**: Scans QR codes and records ephemeral voice notes with WebRTC permissions.
+          files: android/app/build/outputs/apk/debug/*.apk
