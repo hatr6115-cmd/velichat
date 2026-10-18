@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Mic, MicOff, Video, VideoOff, PhoneOff, Terminal } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, Phone, PhoneOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface CallModalProps {
@@ -20,7 +20,7 @@ interface CallModalProps {
 
 export const CallModal: React.FC<CallModalProps> = ({
   kind,
-  partnerAlias = "PEER",
+  partnerAlias = "Participant",
   isInitiator,
   localStream,
   remoteStream,
@@ -101,19 +101,19 @@ export const CallModal: React.FC<CallModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/95 font-mono select-none">
-      <div className="relative flex flex-col w-full max-w-xl h-[85vh] max-h-[600px] bg-black border border-green-500/40 rounded-none shadow-[0_0_20px_rgba(34,197,94,0.15)] overflow-hidden">
-        {/* Terminal Header */}
-        <div className="flex items-center justify-between px-3 py-2 bg-black border-b border-green-500/30 text-green-500 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 bg-green-500 animate-pulse" />
-            <span className="tracking-wider uppercase font-bold">
-              [P2P_{kind.toUpperCase()}_STREAM] // NO_RECORD
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-md select-none transition-all">
+      <div className="relative flex flex-col w-full max-w-xl h-[80vh] max-h-[640px] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3.5 bg-zinc-50 dark:bg-zinc-900/90 border-b border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-sm font-semibold tracking-tight">
+              {kind === "video" ? "Video Call" : "Voice Call"}
             </span>
           </div>
           {callStatus === "connected" && (
-            <div className="text-green-400 font-bold">
-              T+{formatDuration(callDuration)}
+            <div className="text-xs font-mono font-medium px-2.5 py-1 rounded-full bg-zinc-200/60 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
+              {formatDuration(callDuration)}
             </div>
           )}
         </div>
@@ -121,15 +121,14 @@ export const CallModal: React.FC<CallModalProps> = ({
         {/* Video / Audio Area */}
         <div
           onClick={handleManualPlay}
-          className="relative flex-1 bg-black flex items-center justify-center overflow-hidden border-b border-green-500/20 cursor-pointer"
+          className="relative flex-1 bg-zinc-950 flex items-center justify-center overflow-hidden"
         >
-          {/* Always mount audio tag so voice stream is never blocked */}
+          {/* Audio element for stream playback */}
           <audio ref={remoteAudioRef} autoPlay playsInline />
 
           {kind === "video" && (
             <>
-              <div className="absolute inset-0 flex items-center justify-center bg-black">
-                {/* Persistent video element prevents unmount/remount race conditions */}
+              <div className="absolute inset-0 flex items-center justify-center bg-zinc-950">
                 <video
                   ref={remoteVideoRef}
                   autoPlay
@@ -137,19 +136,22 @@ export const CallModal: React.FC<CallModalProps> = ({
                   className={`w-full h-full object-cover ${remoteStream ? "block" : "hidden"}`}
                 />
                 {!remoteStream && (
-                  <div className="flex flex-col items-center gap-2 text-green-500/70 text-xs">
-                    <div className="border border-green-500/40 px-3 py-1 uppercase tracking-widest text-green-400">
-                      {partnerAlias}
+                  <div className="flex flex-col items-center gap-3 text-zinc-400">
+                    <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center text-xl font-bold text-white shadow-lg">
+                      {partnerAlias.slice(0, 2).toUpperCase()}
                     </div>
-                    <p className="animate-pulse">
-                      &gt; {callStatus === "calling" ? "DIALING..." : "AWAITING_STREAM..."}
-                    </p>
+                    <div className="text-center">
+                      <p className="text-sm font-semibold text-zinc-200">{partnerAlias}</p>
+                      <p className="text-xs text-zinc-400 animate-pulse mt-0.5">
+                        {callStatus === "calling" ? "Calling..." : "Connecting stream..."}
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
 
               {localStream && !isCamOff && (
-                <div className="absolute top-3 right-3 w-24 h-32 sm:w-28 sm:h-36 border border-green-500 bg-black z-10 overflow-hidden">
+                <div className="absolute top-4 right-4 w-28 h-36 sm:w-32 sm:h-44 rounded-2xl border-2 border-white/20 bg-zinc-900 shadow-xl overflow-hidden z-10">
                   <video
                     ref={localVideoRef}
                     autoPlay
@@ -163,80 +165,82 @@ export const CallModal: React.FC<CallModalProps> = ({
           )}
 
           {kind === "audio" && (
-            <div className="flex flex-col items-center justify-center gap-3 text-center p-6 text-green-500">
-              <div className="border border-green-500/60 p-4 w-20 h-20 flex items-center justify-center text-xl font-bold">
-                {partnerAlias.slice(0, 4).toUpperCase()}
+            <div className="flex flex-col items-center justify-center gap-4 text-center p-8">
+              <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-3xl font-bold text-white shadow-xl ring-4 ring-white/10">
+                {partnerAlias.slice(0, 2).toUpperCase()}
               </div>
 
               <div className="space-y-1">
-                <div className="text-xs uppercase tracking-widest text-green-400 font-bold">
-                  &gt; {partnerAlias}
-                </div>
-                <p className="text-[11px] text-green-500/60">
-                  {callStatus === "calling" && "STATUS: CALLING..."}
-                  {callStatus === "ringing" && "STATUS: INCOMING_SIGNAL"}
-                  {callStatus === "connected" && "STATUS: ENCRYPTED_AUDIO_ACTIVE"}
-                  {callStatus === "ended" && "STATUS: TERMINATED"}
+                <h3 className="text-base font-semibold text-white">
+                  {partnerAlias}
+                </h3>
+                <p className="text-xs text-zinc-400">
+                  {callStatus === "calling" && "Calling..."}
+                  {callStatus === "ringing" && "Incoming call..."}
+                  {callStatus === "connected" && "Call in progress"}
+                  {callStatus === "ended" && "Call ended"}
                 </p>
               </div>
             </div>
           )}
 
           {needsUserTap && (
-            <div className="absolute bottom-2 z-20 px-3 py-1 bg-green-500 text-black text-[11px] font-bold uppercase tracking-wider animate-pulse">
-              [TAP TO PLAY MEDIA STREAM]
+            <div className="absolute bottom-4 z-20 px-4 py-2 rounded-full bg-white text-zinc-950 text-xs font-semibold shadow-lg animate-bounce">
+              Tap anywhere to play audio/video
             </div>
           )}
         </div>
 
         {/* Controls */}
-        <div className="flex items-center justify-center gap-3 px-4 py-3 bg-black text-xs">
+        <div className="flex items-center justify-center gap-4 px-6 py-4 bg-zinc-50 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800">
           {callStatus === "ringing" && !isInitiator ? (
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-5">
               <button
                 onClick={onReject}
-                className="px-4 py-2 border border-red-500 text-red-500 hover:bg-red-500/20 uppercase font-bold"
+                className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 font-medium text-xs transition-colors"
               >
-                [REJECT]
+                <PhoneOff className="w-4 h-4" /> Decline
               </button>
               <button
                 onClick={onAccept}
-                className="px-4 py-2 border border-green-500 bg-green-500/10 text-green-400 hover:bg-green-500/20 uppercase font-bold animate-pulse"
+                className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-md transition-all animate-pulse"
               >
-                [ACCEPT]
+                <Phone className="w-4 h-4" /> Accept
               </button>
             </div>
           ) : (
             <div className="flex items-center gap-3">
               <button
                 onClick={onToggleMic}
-                className={`px-3 py-1.5 border uppercase font-bold transition-colors ${
+                className={`flex items-center justify-center w-11 h-11 rounded-full border transition-all ${
                   isMicMuted
-                    ? "border-red-500 text-red-500 bg-red-500/10"
-                    : "border-green-500/50 text-green-400 hover:border-green-500"
+                    ? "bg-red-500/10 border-red-500/30 text-red-500"
+                    : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700"
                 }`}
+                title={isMicMuted ? "Unmute microphone" : "Mute microphone"}
               >
-                {isMicMuted ? "[MIC:OFF]" : "[MIC:ON]"}
+                {isMicMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
               </button>
 
               {kind === "video" && (
                 <button
                   onClick={onToggleCam}
-                  className={`px-3 py-1.5 border uppercase font-bold transition-colors ${
+                  className={`flex items-center justify-center w-11 h-11 rounded-full border transition-all ${
                     isCamOff
-                      ? "border-red-500 text-red-500 bg-red-500/10"
-                      : "border-green-500/50 text-green-400 hover:border-green-500"
+                      ? "bg-red-500/10 border-red-500/30 text-red-500"
+                      : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700"
                   }`}
+                  title={isCamOff ? "Turn on camera" : "Turn off camera"}
                 >
-                  {isCamOff ? "[CAM:OFF]" : "[CAM:ON]"}
+                  {isCamOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
                 </button>
               )}
 
               <button
                 onClick={onHangup}
-                className="px-4 py-1.5 border border-red-500 text-red-500 hover:bg-red-500/20 uppercase font-bold"
+                className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-md transition-all ml-2"
               >
-                [HANGUP]
+                <PhoneOff className="w-4 h-4" /> End Call
               </button>
             </div>
           )}

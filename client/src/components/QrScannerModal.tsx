@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
 import { Camera, Image as ImageIcon, RefreshCw, X, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -149,28 +149,28 @@ export default function QrScannerModal({ isOpen, onClose, onScan }: QrScannerMod
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md overflow-hidden bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800/80">
-          <div className="flex items-center gap-2.5">
-            <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-400">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="relative w-full max-w-md overflow-hidden bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-blue-500/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400">
               <Camera size={18} />
             </div>
             <div>
-              <h3 className="text-base font-semibold text-white">Scan Invite QR</h3>
-              <p className="text-xs text-slate-400">Point your camera at a VeilChat QR code</p>
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Scan QR Code</h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">Align camera with the invite QR</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
             aria-label="Close scanner"
           >
             <X size={18} />
           </button>
         </div>
 
-        <div className="relative aspect-square w-full bg-black overflow-hidden flex items-center justify-center">
+        <div className="relative aspect-square w-full bg-zinc-950 overflow-hidden flex items-center justify-center">
           <video
             ref={videoRef}
             className="absolute inset-0 w-full h-full object-cover"
@@ -179,42 +179,42 @@ export default function QrScannerModal({ isOpen, onClose, onScan }: QrScannerMod
           />
           <canvas ref={canvasRef} className="hidden" />
 
-          <div className="relative z-10 w-64 h-64 border-2 border-emerald-400/40 rounded-2xl flex items-center justify-center pointer-events-none">
-            <div className="absolute -top-1 -left-1 w-6 h-6 border-t-2 border-l-2 border-emerald-400 rounded-tl-lg" />
-            <div className="absolute -top-1 -right-1 w-6 h-6 border-t-2 border-r-2 border-emerald-400 rounded-tr-lg" />
-            <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-2 border-l-2 border-emerald-400 rounded-bl-lg" />
-            <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-2 border-r-2 border-emerald-400 rounded-br-lg" />
-            <div className="absolute left-2 right-2 h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_#34d399] animate-pulse" />
+          <div className="relative z-10 w-60 h-60 border-2 border-blue-400/50 rounded-2xl flex items-center justify-center pointer-events-none">
+            <div className="absolute -top-1 -left-1 w-6 h-6 border-t-2 border-l-2 border-blue-500 rounded-tl-lg" />
+            <div className="absolute -top-1 -right-1 w-6 h-6 border-t-2 border-r-2 border-blue-500 rounded-tr-lg" />
+            <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-2 border-l-2 border-blue-500 rounded-bl-lg" />
+            <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-2 border-r-2 border-blue-500 rounded-br-lg" />
+            <div className="absolute left-3 right-3 h-0.5 bg-gradient-to-r from-transparent via-blue-500 to-transparent shadow-[0_0_12px_#3b82f6] animate-pulse" />
           </div>
 
           {error && (
-            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-6 text-center bg-slate-900/95 backdrop-blur-sm">
-              <div className="flex items-center justify-center w-12 h-12 mb-3 rounded-full bg-red-500/10 text-red-400">
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-6 text-center bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm">
+              <div className="flex items-center justify-center w-12 h-12 mb-3 rounded-full bg-red-500/10 text-red-500">
                 <AlertCircle size={24} />
               </div>
-              <p className="text-sm text-slate-200 mb-4 max-w-xs">{error}</p>
+              <p className="text-sm text-zinc-700 dark:text-zinc-300 mb-4 max-w-xs">{error}</p>
               <div className="flex gap-2">
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => startCamera()}
-                  className="rounded-xl border-slate-700 hover:bg-slate-800 text-xs"
+                  className="rounded-full text-xs font-medium"
                 >
-                  <RefreshCw size={14} className="mr-1.5" /> Retry Camera
+                  <RefreshCw size={14} className="mr-1.5" /> Try Again
                 </Button>
                 <Button
                   size="sm"
                   onClick={() => fileInputRef.current?.click()}
-                  className="rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs"
+                  className="rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium"
                 >
-                  <ImageIcon size={14} className="mr-1.5" /> Upload Image
+                  <ImageIcon size={14} className="mr-1.5" /> Choose Image
                 </Button>
               </div>
             </div>
           )}
         </div>
 
-        <div className="flex items-center justify-between px-6 py-4 bg-slate-900/90 border-t border-slate-800">
+        <div className="flex items-center justify-between px-6 py-4 bg-zinc-50 dark:bg-zinc-900/80 border-t border-zinc-200 dark:border-zinc-800">
           <input
             ref={fileInputRef}
             type="file"
@@ -229,16 +229,16 @@ export default function QrScannerModal({ isOpen, onClose, onScan }: QrScannerMod
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-2 text-xs font-medium text-slate-300 hover:text-emerald-400 transition-colors"
+            className="inline-flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
           >
-            <ImageIcon size={16} /> Upload QR Screenshot
+            <ImageIcon size={16} /> Upload QR Image
           </button>
 
           {cameras.length > 1 && (
             <button
               type="button"
               onClick={switchCamera}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-emerald-400 transition-colors"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
             >
               <RefreshCw size={14} /> Switch Camera
             </button>

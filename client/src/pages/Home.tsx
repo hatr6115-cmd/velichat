@@ -15,6 +15,7 @@ import {
   LogOut,
   MessageSquare,
   Mic,
+  Moon,
   Play,
   QrCode,
   Radio,
@@ -22,6 +23,7 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  Sun,
   Users,
   Volume2,
   Video,
@@ -36,6 +38,7 @@ import TemporaryQr from "@/components/TemporaryQr";
 import QrScannerModal from "@/components/QrScannerModal";
 import { useRoomStream } from "@/hooks/useRoomStream";
 import { CallModal } from "@/components/CallModal";
+import { useTheme } from "@/contexts/ThemeContext";
 import {
   createTemporaryInvite,
   encodeTemporaryInvite,
@@ -46,16 +49,16 @@ import {
 const aliasPattern = /^[A-Za-z0-9 ._-]{2,32}$/;
 
 const RANDOM_ALIASES = [
-  "SYS_CORE",
-  "NODE_01",
-  "GHOST_PKT",
-  "HEX_DRIFT",
-  "ZERO_TRACE",
-  "CIPHER_9",
-  "SYN_ACK",
-  "ROOT_DAEMON",
-  "DARK_RELAY",
-  "PULSE_SEC",
+  "Alex",
+  "Sam",
+  "Jordan",
+  "Taylor",
+  "Morgan",
+  "Casey",
+  "Riley",
+  "Avery",
+  "Jamie",
+  "Robin",
 ];
 
 type Session = {
@@ -80,6 +83,7 @@ function validateAlias(alias: string) {
 
 export default function Home() {
   const [, setLocation] = useLocation();
+  const { theme, toggleTheme } = useTheme();
 
   const [inviteState] = useState(() => {
     const raw = new URLSearchParams(window.location.search).get("invite");
@@ -89,7 +93,7 @@ export default function Home() {
     } catch {
       return {
         invite: null as TemporaryInvite | null,
-        error: "ERR: INVITE_TOKEN_INVALID_OR_EXPIRED",
+        error: "Invite link is invalid or expired.",
       };
     }
   });
@@ -1074,82 +1078,108 @@ export default function Home() {
     const isAboutToExpire = roomExpiresAt - now <= 5 * 60 * 1000; // <= 5 minutes
 
     return (
-      <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-full max-w-4xl mx-auto bg-black text-green-500 font-mono select-none overflow-hidden">
-        {/* Terminal Header */}
-        <header className="flex items-center justify-between px-3 py-2 bg-black border-b border-green-500/30 z-20 shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className={`w-2 h-2 ${connected ? "bg-green-500 animate-pulse" : "bg-green-800"}`} />
+      <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-full max-w-3xl mx-auto bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden transition-colors">
+        {/* Header */}
+        <header className="flex items-center justify-between px-4 py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-20 shrink-0 shadow-xs">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="relative">
+              <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-sm shadow-sm">
+                {(connected ? partnerAlias || "Friend" : "Wait").slice(0, 2).toUpperCase()}
+              </div>
+              <span
+                className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white dark:border-zinc-900 ${
+                  connected ? "bg-emerald-500" : "bg-zinc-400"
+                }`}
+              />
+            </div>
+
             <div className="min-w-0">
-              <span className="text-xs font-bold uppercase tracking-wider text-green-400 truncate block">
-                &gt; {connected ? partnerAlias : "WAITING_PEER..."}
+              <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate block">
+                {connected ? partnerAlias : "Waiting for friend..."}
               </span>
-              <span className="text-[10px] text-green-700 block">
-                UID: {session.alias} [{connected ? `${pCount}P` : "1P"}]
+              <span className="text-xs text-zinc-500 dark:text-zinc-400 block truncate">
+                {connected ? `${pCount} in room` : "Share invite link to connect"}
               </span>
             </div>
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-1.5 shrink-0 text-xs">
+          <div className="flex items-center gap-1.5 shrink-0">
             {/* Expiry Counter & +Time Button */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 mr-1">
               <span
-                className={`px-2 py-0.5 border text-[11px] font-bold ${
+                className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 ${
                   isAboutToExpire
-                    ? "border-red-500 text-red-500 animate-pulse"
-                    : "border-green-500/40 text-green-400"
+                    ? "bg-red-500/10 text-red-600 dark:text-red-400 animate-pulse font-semibold"
+                    : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
                 }`}
+                title="Time remaining before room closes"
               >
-                {isExpired ? "00:00" : remainingTime}
+                <Clock3 className="w-3.5 h-3.5" />
+                <span>{isExpired ? "00:00" : remainingTime}</span>
               </span>
 
-              {/* Add Time button - Enabled especially when under 5 minutes */}
               <button
                 type="button"
                 onClick={() => void handleExtendRoomTime(15)}
                 disabled={extendExpiryMutation.isPending}
                 title="Add 15 minutes to session"
-                className={`px-2 py-0.5 border text-[10px] uppercase font-bold transition-colors ${
+                className={`px-2 py-1 rounded-lg text-xs font-semibold transition-all ${
                   isAboutToExpire
-                    ? "border-green-400 bg-green-500/20 text-green-300 animate-bounce"
-                    : "border-green-500/30 text-green-600 hover:text-green-400 hover:border-green-500"
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs animate-bounce"
+                    : "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300"
                 }`}
               >
-                +15M
+                +15m
               </button>
             </div>
 
-            {/* Call Buttons */}
+            {/* Voice Call */}
             <button
               onClick={() => handleStartCall("audio")}
               disabled={!connected || isExpired || isInCall}
-              title="Encrypted Audio Call"
-              className="px-2 py-0.5 border border-green-500/50 hover:border-green-400 text-green-400 hover:bg-green-500/10 text-[11px] disabled:opacity-30 uppercase"
+              title="Voice Call"
+              className="p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
             >
-              [CALL]
+              <Phone className="w-4 h-4" />
             </button>
 
+            {/* Video Call */}
             <button
               onClick={() => handleStartCall("video")}
               disabled={!connected || isExpired || isInCall}
-              title="Encrypted Video Call"
-              className="px-2 py-0.5 border border-green-500/50 hover:border-green-400 text-green-400 hover:bg-green-500/10 text-[11px] disabled:opacity-30 uppercase"
+              title="Video Call"
+              className="p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
             >
-              [VID]
+              <Video className="w-4 h-4" />
             </button>
 
+            {/* QR Invite */}
             <button
               onClick={() => setIsQrModalOpen(true)}
-              className="px-2 py-0.5 border border-green-500/50 hover:border-green-400 text-green-400 hover:bg-green-500/10 text-[11px] uppercase"
+              title="Show QR Code"
+              className="p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
             >
-              [QR]
+              <QrCode className="w-4 h-4" />
             </button>
 
+            {/* Theme Toggle */}
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="p-2 rounded-full text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {theme === "dark" ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-zinc-700" />}
+            </button>
+
+            {/* Exit Room */}
             <button
               onClick={() => setIsEndModalOpen(true)}
-              className="px-2 py-0.5 border border-red-500/60 hover:border-red-400 text-red-500 hover:bg-red-500/10 text-[11px] uppercase"
+              title="Leave Room"
+              className="p-2 rounded-full text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors ml-1"
             >
-              [EXIT]
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </header>
@@ -1157,34 +1187,39 @@ export default function Home() {
         {/* Message Feed */}
         <main
           ref={messageListRef}
-          className="flex-1 overflow-y-auto p-3 space-y-2 bg-black overscroll-contain text-xs"
+          className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3 bg-zinc-50 dark:bg-zinc-950 overscroll-contain text-sm"
         >
           {!connected && (
-            <div className="border border-dashed border-green-500/30 p-6 text-center max-w-sm mx-auto my-8">
-              <p className="text-green-400 font-bold uppercase mb-2">&gt; AWAITING_PEER_CONNECTION</p>
-              <p className="text-[11px] text-green-700 mb-4">SHARE_INVITE_TOKEN_OR_SCAN_MATRIX</p>
-              <div className="flex gap-2 justify-center">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 text-center max-w-sm mx-auto my-8 shadow-xs space-y-3">
+              <div className="w-12 h-12 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center mx-auto">
+                <Users className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Waiting for Someone to Join</h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                Share your invite link or let them scan the QR code to start chatting.
+              </p>
+              <div className="flex gap-2 justify-center pt-2">
                 <button
                   onClick={() => setIsQrModalOpen(true)}
-                  className="px-3 py-1.5 border border-green-500 bg-green-500/10 text-green-400 text-xs uppercase hover:bg-green-500/20"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium shadow-xs transition-colors"
                 >
-                  [SHOW_QR]
+                  <QrCode className="w-3.5 h-3.5" /> Show QR
                 </button>
                 <button
                   onClick={() => {
                     navigator.clipboard.writeText(inviteUrl);
-                    toast.success("TOKEN_COPIED");
+                    toast.success("Invite link copied to clipboard");
                   }}
-                  className="px-3 py-1.5 border border-green-500/50 text-green-500 text-xs uppercase hover:border-green-400"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-full border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-medium shadow-xs transition-colors"
                 >
-                  [COPY_LINK]
+                  <Copy className="w-3.5 h-3.5" /> Copy Link
                 </button>
               </div>
             </div>
           )}
 
           {(room?.messages && room.messages.length > 0) || (room?.media && room.media.length > 0) ? (
-            <div className="space-y-2 max-w-3xl mx-auto">
+            <div className="space-y-3 max-w-2xl mx-auto">
               {room?.messages?.map((item) => {
                 const isOwn = item.memberId === session.memberId;
                 return (
@@ -1196,30 +1231,42 @@ export default function Home() {
                     }}
                     className={`flex flex-col ${isOwn ? "items-end" : "items-start"}`}
                   >
-                    <div className="text-[10px] text-green-700 mb-0.5">
-                      [{new Date(item.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}] {isOwn ? "LOCAL" : item.alias}
-                    </div>
+                    {!isOwn && (
+                      <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 ml-1 mb-1">
+                        {item.alias}
+                      </span>
+                    )}
 
                     <div
-                      className={`max-w-[88%] p-2 border ${
+                      className={`max-w-[82%] px-4 py-2.5 rounded-2xl shadow-xs transition-all ${
                         isOwn
-                          ? "bg-black border-green-500/80 text-green-400 shadow-[0_0_8px_rgba(34,197,94,0.1)]"
-                          : "bg-black border-green-900 text-green-300"
+                          ? "bg-blue-600 text-white rounded-br-xs"
+                          : "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-xs"
                       }`}
                     >
-                      <p className="whitespace-pre-wrap leading-relaxed">{item.body}</p>
+                      <p className="whitespace-pre-wrap leading-relaxed text-sm break-words">{item.body}</p>
 
-                      {isOwn && (
-                        <div className="text-[9px] text-green-700 text-right mt-1">
-                          {item.readBy.length >= room.participantCount - 1 && room.participantCount > 1 ? (
-                            <span className="text-green-400">[ACK:READ]</span>
-                          ) : item.deliveredTo.length > 0 ? (
-                            <span className="text-green-600">[ACK:DELIVERED]</span>
-                          ) : (
-                            <span className="text-green-800">[TRANSMITTED]</span>
-                          )}
-                        </div>
-                      )}
+                      <div
+                        className={`flex items-center justify-end gap-1 text-[10px] mt-1 ${
+                          isOwn ? "text-blue-100" : "text-zinc-400 dark:text-zinc-500"
+                        }`}
+                      >
+                        <span>
+                          {new Date(item.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+
+                        {isOwn && (
+                          <span>
+                            {item.readBy.length >= room.participantCount - 1 && room.participantCount > 1 ? (
+                              <CheckCheck className="w-3.5 h-3.5 text-blue-200 inline" />
+                            ) : item.deliveredTo.length > 0 ? (
+                              <CheckCheck className="w-3.5 h-3.5 opacity-70 inline" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5 opacity-60 inline" />
+                            )}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -1234,40 +1281,56 @@ export default function Home() {
 
                 return (
                   <div key={item.id} className={`flex flex-col ${isOwn ? "items-end" : "items-start"}`}>
-                    <div className="text-[10px] text-green-700 mb-0.5">
-                      [{new Date(item.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}] {isOwn ? "LOCAL" : item.alias} : {item.kind.toUpperCase()}
-                    </div>
+                    {!isOwn && (
+                      <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 ml-1 mb-1">
+                        {item.alias}
+                      </span>
+                    )}
 
-                    <div className="p-2 border border-green-500/50 bg-black text-xs">
+                    <div
+                      className={`p-3 rounded-2xl shadow-xs border ${
+                        isOwn
+                          ? "bg-blue-600/10 border-blue-500/20 text-zinc-900 dark:text-zinc-100 rounded-br-xs"
+                          : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-xs"
+                      }`}
+                    >
                       {item.kind === "voice" ? (
                         isConsumed ? (
-                          <span className="text-green-800">[VOICE_PACKET_CONSUMED]</span>
+                          <div className="flex items-center gap-2 text-xs text-zinc-400 italic py-1 px-2">
+                            <Volume2 className="w-4 h-4 opacity-50" />
+                            <span>Voice message expired</span>
+                          </div>
                         ) : (
-                          <div className="flex flex-col gap-1 min-w-[200px]">
+                          <div className="flex flex-col gap-1.5 min-w-[220px]">
                             <audio
                               controls
                               controlsList="nodownload"
                               playsInline
                               preload="auto"
                               src={item.dataUrl}
-                              className="w-full h-7 invert"
+                              className="w-full h-8"
                               onEnded={() => {
                                 if (!isOwn) void consumeMediaOnce(item.id);
                               }}
                             />
                             {!isOwn && (
-                              <span className="text-[9px] text-green-700">&gt; PLAYS_ONCE // AUTO_PURGE</span>
+                              <span className="text-[10px] text-zinc-500 dark:text-zinc-400 px-1">
+                                Plays once then disappears
+                              </span>
                             )}
                           </div>
                         )
                       ) : isConsumed ? (
-                        <span className="text-green-800">[IMAGE_PACKET_PURGED]</span>
+                        <div className="flex items-center gap-2 text-xs text-zinc-400 italic py-1 px-2">
+                          <Eye className="w-4 h-4 opacity-50" />
+                          <span>Photo already viewed</span>
+                        </div>
                       ) : (
                         <button
                           onClick={() => openViewOncePhoto(item)}
-                          className="px-3 py-1.5 border border-green-500 bg-green-500/10 text-green-400 uppercase font-bold hover:bg-green-500/20 text-xs"
+                          className="flex items-center gap-2 px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs shadow-xs transition-colors"
                         >
-                          [VIEW_IMAGE_ONCE]
+                          <Eye className="w-4 h-4" /> View photo (once)
                         </button>
                       )}
                     </div>
@@ -1278,43 +1341,54 @@ export default function Home() {
           ) : null}
 
           {room?.typingAliases && room.typingAliases.length > 0 && (
-            <div className="text-[10px] text-green-500 animate-pulse">
-              &gt; {room.typingAliases.join(", ")} TYPING...
+            <div className="text-xs text-zinc-500 dark:text-zinc-400 italic max-w-2xl mx-auto animate-pulse flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping" />
+              <span>{room.typingAliases.join(", ")} is typing...</span>
             </div>
           )}
         </main>
 
         {/* Floating preview for selected photo */}
         {selectedPhoto && (
-          <div className="flex items-center justify-between px-3 py-1.5 bg-black border-t border-green-500/40 text-xs">
-            <span className="text-green-400">&gt; ATTACHED_IMAGE [VIEW_ONCE]</span>
+          <div className="flex items-center justify-between px-4 py-2 bg-blue-50 dark:bg-blue-950/40 border-t border-blue-200 dark:border-blue-900/50 text-xs text-blue-900 dark:text-blue-200">
+            <span className="flex items-center gap-2 font-medium">
+              <ImageIcon className="w-4 h-4" /> Photo attached (view-once)
+            </span>
             <button
               onClick={() => setSelectedPhoto(null)}
-              className="text-red-500 hover:text-red-400 font-bold"
+              className="text-red-500 hover:text-red-600 p-1 rounded-full font-bold"
+              aria-label="Remove photo"
             >
-              [X]
+              <X className="w-4 h-4" />
             </button>
           </div>
         )}
 
         {/* Input Bar */}
-        <footer className="p-2 bg-black border-t border-green-500/30 shrink-0">
+        <footer className="p-3 sm:p-4 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
           {isRecording ? (
-            <div className="flex items-center justify-between gap-2 p-1.5 border border-red-500 text-red-500 text-xs">
-              <span className="animate-pulse">
-                ● REC {String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:{String(recordingSeconds % 60).padStart(2, "0")}
+            <div className="flex items-center justify-between gap-3 p-2 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 text-xs">
+              <span className="flex items-center gap-2 font-medium pl-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse" />
+                Recording voice note... ({String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:{String(recordingSeconds % 60).padStart(2, "0")})
               </span>
               <div className="flex gap-2">
-                <button onClick={cancelRecording} className="px-2 py-0.5 border border-red-500 hover:bg-red-500/20 uppercase">
-                  [ABORT]
+                <button
+                  onClick={cancelRecording}
+                  className="px-3 py-1.5 rounded-full border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 text-xs font-medium hover:bg-red-100 dark:hover:bg-red-900/40"
+                >
+                  Cancel
                 </button>
-                <button onClick={stopAndSendRecording} className="px-2 py-0.5 border border-green-500 text-green-400 hover:bg-green-500/20 uppercase">
-                  [SEND]
+                <button
+                  onClick={stopAndSendRecording}
+                  className="px-4 py-1.5 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-medium shadow-xs"
+                >
+                  Send
                 </button>
               </div>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 max-w-3xl mx-auto w-full">
+            <div className="flex items-center gap-2 max-w-2xl mx-auto w-full">
               <input
                 id="photo-upload-input"
                 type="file"
@@ -1325,28 +1399,28 @@ export default function Home() {
                   e.currentTarget.value = "";
                 }}
               />
+
               <button
                 type="button"
                 disabled={!connected || isExpired}
                 onClick={() => document.getElementById("photo-upload-input")?.click()}
-                className="px-2 py-1.5 border border-green-500/40 text-green-500 hover:border-green-400 hover:text-green-300 disabled:opacity-30 uppercase text-xs"
-                title="Attach View-Once Photo"
+                className="p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors"
+                title="Send view-once photo"
               >
-                [IMG]
+                <ImageIcon className="w-5 h-5" />
               </button>
 
               <button
                 type="button"
                 disabled={!connected || isExpired}
                 onClick={startRecording}
-                className="px-2 py-1.5 border border-green-500/40 text-green-500 hover:border-green-400 hover:text-green-300 disabled:opacity-30 uppercase text-xs"
-                title="Record Ephemeral Audio"
+                className="p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors"
+                title="Record voice note"
               >
-                [MIC]
+                <Mic className="w-5 h-5" />
               </button>
 
-              <div className="flex-1 min-w-0 relative flex items-center">
-                <span className="text-green-600 mr-1.5">&gt;</span>
+              <div className="flex-1 min-w-0">
                 <input
                   ref={textareaRef as any}
                   value={message}
@@ -1358,17 +1432,18 @@ export default function Home() {
                     }
                   }}
                   disabled={!connected || isExpired}
-                  placeholder={connected ? "type packet..." : "awaiting peer..."}
-                  className="w-full bg-black border border-green-500/40 focus:border-green-400 px-2 py-1 text-xs text-green-400 placeholder-green-800 outline-none font-mono"
+                  placeholder={connected ? "Type a message..." : "Waiting for friend to connect..."}
+                  className="w-full bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 rounded-full px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                 />
               </div>
 
               <button
                 onClick={() => void send()}
                 disabled={!connected || isExpired || (!message.trim() && !selectedPhoto)}
-                className="px-3 py-1 border border-green-500 bg-green-500/10 text-green-400 hover:bg-green-500/20 disabled:opacity-30 uppercase text-xs font-bold"
+                className="p-2.5 rounded-full bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white shadow-xs transition-colors flex items-center justify-center shrink-0"
+                title="Send"
               >
-                [SEND]
+                <Send className="w-4 h-4" />
               </button>
             </div>
           )}
@@ -1377,17 +1452,22 @@ export default function Home() {
         {/* View Once Photo Overlay */}
         {activePhoto && (
           <div
-            className="fixed inset-0 z-50 flex flex-col items-center justify-center p-4 bg-black/98"
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center p-4 bg-black/90 backdrop-blur-md"
             onClick={() => setActivePhoto(null)}
           >
-            <div className="flex items-center justify-between w-full max-w-md mb-2 text-green-500 text-xs">
-              <span className="animate-pulse">&gt; VIEW_ONCE: CLOSES_IN_{photoCountdown}S</span>
-              <button onClick={() => setActivePhoto(null)} className="text-red-500 font-bold">
-                [CLOSE]
+            <div className="flex items-center justify-between w-full max-w-md mb-3 text-white text-xs font-medium">
+              <span className="flex items-center gap-1.5">
+                <Eye className="w-4 h-4 text-blue-400" /> Disappears in {photoCountdown}s
+              </span>
+              <button
+                onClick={() => setActivePhoto(null)}
+                className="px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 text-white font-medium"
+              >
+                Close
               </button>
             </div>
-            <div className="border border-green-500/50 max-h-[75vh] overflow-hidden">
-              <img src={activePhoto} alt="Ephemeral packet" className="max-h-[70vh] object-contain" />
+            <div className="rounded-2xl overflow-hidden border border-white/10 max-h-[75vh] shadow-2xl">
+              <img src={activePhoto} alt="View once message" className="max-h-[70vh] object-contain" />
             </div>
           </div>
         )}
@@ -1414,54 +1494,57 @@ export default function Home() {
         {/* QR Invite Modal */}
         {isQrModalOpen && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 font-mono"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-200"
             onClick={(e) => {
               if (e.target === e.currentTarget) setIsQrModalOpen(false);
             }}
           >
-            <div className="relative w-full max-w-xs bg-black border border-green-500 p-5 text-center">
-              <div className="flex justify-between items-center mb-3 text-xs text-green-500">
-                <span className="font-bold">&gt; PEER_QR_TOKEN</span>
-                <button
-                  type="button"
-                  onClick={() => setIsQrModalOpen(false)}
-                  className="text-red-500 font-bold"
-                >
-                  [X]
-                </button>
-              </div>
-              <div className="p-2 bg-white inline-block">
-                <TemporaryQr
-                  inviteUrl={inviteUrl}
-                  inline={true}
-                  onClose={() => setIsQrModalOpen(false)}
-                />
-              </div>
-              <p className="text-[10px] text-green-700 mt-3">&gt; SCAN_TO_ATTACH_PEER</p>
+            <div className="relative w-full max-w-sm bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-2xl text-center">
+              <button
+                type="button"
+                onClick={() => setIsQrModalOpen(false)}
+                className="absolute top-4 right-4 p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <TemporaryQr
+                inviteUrl={inviteUrl}
+                inline={true}
+                onClose={() => setIsQrModalOpen(false)}
+              />
             </div>
           </div>
         )}
 
         {/* End Room Modal */}
         {isEndModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 font-mono">
-            <div className="w-full max-w-sm bg-black border border-red-500 p-5 text-center space-y-3">
-              <p className="text-red-500 font-bold text-sm">&gt; PURGE_SESSION_DATA?</p>
-              <p className="text-xs text-green-800">
-                IMMEDIATE_DISCONNECT // ZERO_MEMORY_PERSISTENCE
-              </p>
-              <div className="flex gap-3 justify-center pt-2">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="w-full max-w-sm bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 text-center space-y-4 shadow-2xl">
+              <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center mx-auto">
+                <LogOut className="w-6 h-6" />
+              </div>
+
+              <div className="space-y-1">
+                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Leave Conversation?</h3>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                  This room is temporary. All messages and media will be erased from memory immediately.
+                </p>
+              </div>
+
+              <div className="flex gap-2 justify-center pt-2">
                 <button
                   onClick={() => setIsEndModalOpen(false)}
-                  className="px-3 py-1.5 border border-green-500 text-green-500 text-xs uppercase"
+                  className="px-4 py-2 rounded-full border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 text-xs font-medium transition-colors"
                 >
-                  [CANCEL]
+                  Stay
                 </button>
                 <button
                   onClick={endRoom}
-                  className="px-3 py-1.5 border border-red-500 bg-red-500/10 text-red-500 hover:bg-red-500/20 text-xs uppercase font-bold"
+                  className="px-5 py-2 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-xs transition-colors"
                 >
-                  [CONFIRM_PURGE]
+                  Leave & Delete
                 </button>
               </div>
             </div>
@@ -1474,82 +1557,113 @@ export default function Home() {
   const isJoin = Boolean(invite);
 
   return (
-    <div className="min-h-[100dvh] bg-black text-green-500 font-mono flex flex-col justify-between p-4 selection:bg-green-500 selection:text-black">
-      {/* Terminal Topline */}
-      <header className="flex items-center justify-between max-w-xl w-full mx-auto py-2 border-b border-green-500/30 text-xs">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 bg-green-500 animate-pulse" />
-          <span className="font-bold tracking-widest text-green-400">VEILCHAT // TERMINAL_V2</span>
+    <div className="min-h-[100dvh] bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex flex-col justify-between p-4 sm:p-6 transition-colors selection:bg-blue-600 selection:text-white">
+      {/* Header */}
+      <header className="flex items-center justify-between max-w-2xl w-full mx-auto py-3">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md">
+            <MessageSquare className="w-4 h-4" />
+          </div>
+          <span className="font-bold text-base tracking-tight text-zinc-900 dark:text-zinc-100">
+            VeilChat
+          </span>
         </div>
-        <button
-          onClick={() => setIsScannerOpen(true)}
-          className="border border-green-500/50 px-2 py-0.5 text-[11px] text-green-400 hover:bg-green-500/10 uppercase"
-        >
-          [SCAN_QR]
-        </button>
-      </header>
 
-      {/* Main Terminal Form */}
-      <main className="max-w-sm w-full mx-auto my-auto py-6">
-        <div className="border border-green-500/50 p-5 bg-black shadow-[0_0_15px_rgba(34,197,94,0.1)] space-y-4">
-          <div className="text-xs text-green-600 border-b border-green-500/20 pb-2">
-            &gt; ZERO_TRACE_IN_MEMORY_STREAM<br />
-            &gt; ENCRYPTION: DTLS-SRTP_P2P<br />
-            &gt; STORAGE: NULL
-          </div>
-
-          {isJoin && (
-            <div className="p-2 border border-green-500/30 text-xs space-y-1">
-              <div className="text-green-400 font-bold">&gt; ATTACHING_TO_ROOM</div>
-              <div className="text-[11px] text-green-700">HOST: {invite?.hostAlias}</div>
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs text-green-600">
-              <label htmlFor="alias-input">&gt; CALLSIGN (ALIAS)</label>
-              <button
-                type="button"
-                onClick={generateRandomAlias}
-                className="text-green-400 hover:underline"
-              >
-                [RND]
-              </button>
-            </div>
-
-            <input
-              id="alias-input"
-              value={alias}
-              onChange={(e) => setAlias(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void (isJoin ? join() : create());
-              }}
-              placeholder="e.g. NODE_01"
-              maxLength={32}
-              autoComplete="off"
-              className="w-full bg-black border border-green-500 px-3 py-2 text-green-400 placeholder-green-800 text-xs font-mono outline-none focus:ring-1 focus:ring-green-400"
-            />
-          </div>
-
-          {error && (
-            <div className="p-2 border border-red-500/60 text-red-500 text-[11px]">
-              &gt; {error}
-            </div>
-          )}
+        <div className="flex items-center gap-2">
+          {/* Light / Dark Mode Toggle */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="p-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 shadow-sm transition-colors"
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            aria-label="Toggle theme"
+          >
+            {theme === "dark" ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-zinc-700" />}
+          </button>
 
           <button
-            onClick={() => void (isJoin ? join() : create())}
-            disabled={createRoom.isPending || joinRoom.isPending || !alias.trim()}
-            className="w-full py-2 border border-green-400 bg-green-500/10 text-green-300 hover:bg-green-500/20 text-xs uppercase font-bold tracking-wider disabled:opacity-30 transition-all"
+            onClick={() => setIsScannerOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs font-medium text-zinc-700 dark:text-zinc-300 shadow-sm transition-colors"
           >
-            {isJoin ? "[ATTACH_TO_ROOM]" : "[INITIALIZE_ROOM]"}
+            <Camera className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+            <span>Scan QR</span>
           </button>
+        </div>
+      </header>
+
+      {/* Main Card */}
+      <main className="max-w-md w-full mx-auto my-auto py-6">
+        <div className="p-6 sm:p-8 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-xl space-y-6">
+          <div className="text-center space-y-1.5">
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+              {isJoin ? "Join Private Chat" : "Start Private Chat"}
+            </h1>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              {isJoin
+                ? `You were invited to chat with ${invite?.hostAlias || "a friend"}.`
+                : "Temporary, private room. Disappears when you leave."}
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center text-xs">
+                <label htmlFor="alias-input" className="font-medium text-zinc-700 dark:text-zinc-300">
+                  Your Nickname
+                </label>
+                <button
+                  type="button"
+                  onClick={generateRandomAlias}
+                  className="flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                >
+                  <Dice5 className="w-3.5 h-3.5" /> Random
+                </button>
+              </div>
+
+              <input
+                id="alias-input"
+                value={alias}
+                onChange={(e) => setAlias(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void (isJoin ? join() : create());
+                }}
+                placeholder="Enter a display name..."
+                maxLength={32}
+                autoComplete="off"
+                className="w-full bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+              />
+            </div>
+
+            {error && (
+              <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 text-xs">
+                {error}
+              </div>
+            )}
+
+            <button
+              onClick={() => void (isJoin ? join() : create())}
+              disabled={createRoom.isPending || joinRoom.isPending || !alias.trim()}
+              className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold shadow-md transition-all flex items-center justify-center gap-2"
+            >
+              {isJoin ? "Join Conversation" : "Create New Room"}
+            </button>
+          </div>
+
+          <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-center gap-4 text-[11px] text-zinc-600 dark:text-zinc-400 font-medium">
+            <span className="flex items-center gap-1">
+              <Lock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Private P2P
+            </span>
+            <span>•</span>
+            <span>Zero Server Storage</span>
+            <span>•</span>
+            <span>Auto-Expires</span>
+          </div>
         </div>
       </main>
 
-      {/* Terminal Footer */}
-      <footer className="text-center text-[10px] text-green-800 py-2">
-        VEILCHAT_CORE // NO_LOGS // NO_STORAGE // EPHEMERAL
+      {/* Footer */}
+      <footer className="text-center text-xs text-zinc-600 dark:text-zinc-400 py-3">
+        VeilChat • Ephemeral, encrypted peer-to-peer conversations
       </footer>
 
       <QrScannerModal

@@ -66,62 +66,50 @@ export default function TemporaryQr({ inviteUrl, onScan, onClose, inline = false
   }
 
   return (
-    <div className={`flex flex-col items-center ${inline ? "" : "p-6 bg-slate-900/90 border border-slate-800 rounded-3xl shadow-xl backdrop-blur-md"}`}>
-      <div className="w-full text-center mb-5">
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 mb-2 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-semibold">
-          <QrCode size={14} /> Temporary Room Invite
-        </div>
-        <h3 className="text-lg font-bold text-white">Share to Connect</h3>
-        <p className="text-xs text-slate-400 mt-1">One guest can scan or open this link to enter.</p>
+    <div className={`flex flex-col items-center ${inline ? "" : "p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-xl"}`}>
+      <div className="w-full text-center mb-4">
+        <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Invite a Friend</h3>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Scan with camera or share the invite link</p>
       </div>
 
       {/* QR Code Container */}
-      <div className="relative p-3 bg-white rounded-2xl shadow-inner mb-6 group transition-transform hover:scale-[1.02]">
+      <div className="relative p-3 bg-white rounded-2xl border border-zinc-200 dark:border-zinc-700 shadow-sm mb-5 transition-transform hover:scale-[1.02]">
         {dataUrl ? (
           <img
             src={dataUrl}
-            alt="Scannable temporary VeilChat room invitation"
-            className="w-52 h-52 object-contain rounded-xl"
+            alt="VeilChat room invite QR"
+            className="w-48 h-48 object-contain rounded-xl"
           />
         ) : (
-          <div className="w-52 h-52 flex items-center justify-center text-slate-400">
-            <QrCode size={48} className="animate-pulse" />
+          <div className="w-48 h-48 flex items-center justify-center text-zinc-400">
+            <QrCode size={40} className="animate-pulse" />
           </div>
         )}
       </div>
 
       {/* Action Buttons */}
-      <div className="grid grid-cols-2 gap-2.5 w-full">
+      <div className="grid grid-cols-2 gap-2 w-full">
         <Button
           onClick={copyInvite}
           variant="outline"
-          className="rounded-xl border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs h-10 gap-1.5"
+          className="rounded-full border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/80 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs h-9 gap-1.5 font-medium"
         >
-          {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
-          {copied ? "Copied!" : "Copy Link"}
+          {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
+          {copied ? "Copied" : "Copy Link"}
         </Button>
         <Button
           onClick={shareInvite}
-          className="rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs h-10 gap-1.5 shadow-lg shadow-emerald-900/20"
+          className="rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs h-9 gap-1.5 font-medium shadow-sm"
         >
-          <Share2 size={15} /> Share Link
+          <Share2 size={14} /> Share
         </Button>
         <Button
           onClick={downloadQr}
-          variant="outline"
-          className="col-span-2 rounded-xl border-slate-800 bg-slate-900/40 hover:bg-slate-800/80 text-slate-300 text-xs h-9 gap-1.5"
+          variant="ghost"
+          className="col-span-2 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 text-xs h-8 gap-1.5 font-normal"
         >
-          <Download size={14} /> Save QR Image
+          <Download size={13} /> Save QR Image
         </Button>
-        {onClose && (
-          <Button
-            type="button"
-            onClick={onClose}
-            className="col-span-2 mt-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs h-10 font-semibold gap-1.5 border border-slate-700/80"
-          >
-            ← Back to Chat
-          </Button>
-        )}
       </div>
     </div>
   );
