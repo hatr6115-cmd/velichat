@@ -1080,54 +1080,51 @@ export default function Home() {
     return (
       <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-full max-w-3xl mx-auto bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden transition-colors">
         {/* Header */}
-        <header className="flex items-center justify-between px-4 py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-20 shrink-0 shadow-xs">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="relative">
-              <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-sm shadow-sm">
+        <header className="flex items-center justify-between px-2.5 sm:px-4 py-2.5 sm:py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-20 shrink-0 shadow-xs">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="relative shrink-0">
+              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-xs sm:text-sm shadow-sm">
                 {(connected ? partnerAlias || "Friend" : "Wait").slice(0, 2).toUpperCase()}
               </div>
               <span
-                className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white dark:border-zinc-900 ${
+                className={`absolute bottom-0 right-0 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border-2 border-white dark:border-zinc-900 ${
                   connected ? "bg-emerald-500" : "bg-zinc-400"
                 }`}
               />
             </div>
 
-            <div className="min-w-0">
-              <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate block">
-                {connected ? partnerAlias : "Waiting for friend..."}
+            <div className="min-w-0 max-w-[85px] xs:max-w-[120px] sm:max-w-none">
+              <span className="text-xs sm:text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate block">
+                {connected ? partnerAlias : "Waiting..."}
               </span>
-              <span className="text-xs text-zinc-500 dark:text-zinc-400 block truncate">
-                {connected ? `${pCount} in room` : "Share invite link to connect"}
+              <span className="text-[10px] sm:text-xs text-zinc-500 dark:text-zinc-400 block truncate">
+                {connected ? `${pCount} online` : "Share link"}
               </span>
             </div>
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
             {/* Expiry Counter & +Time Button */}
-            <div className="flex items-center gap-1 mr-1">
-              <span
-                className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 ${
-                  isAboutToExpire
-                    ? "bg-red-500/10 text-red-600 dark:text-red-400 animate-pulse font-semibold"
-                    : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
-                }`}
-                title="Time remaining before room closes"
-              >
-                <Clock3 className="w-3.5 h-3.5" />
-                <span>{isExpired ? "00:00" : remainingTime}</span>
-              </span>
-
+            <div
+              className={`flex items-center rounded-lg border px-1.5 py-1 text-[11px] sm:text-xs font-medium gap-1 shrink-0 transition-colors ${
+                isAboutToExpire
+                  ? "bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400 font-semibold animate-pulse"
+                  : "bg-zinc-100 dark:bg-zinc-800/90 border-zinc-200 dark:border-zinc-700/80 text-zinc-600 dark:text-zinc-300"
+              }`}
+              title="Time remaining before room closes"
+            >
+              <Clock3 className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+              <span className="tabular-nums">{isExpired ? "00:00" : remainingTime}</span>
               <button
                 type="button"
                 onClick={() => void handleExtendRoomTime(15)}
                 disabled={extendExpiryMutation.isPending}
                 title="Add 15 minutes to session"
-                className={`px-2 py-1 rounded-lg text-xs font-semibold transition-all ${
+                className={`ml-0.5 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-bold transition-all ${
                   isAboutToExpire
-                    ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs animate-bounce"
-                    : "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300"
+                    ? "bg-red-600 hover:bg-red-700 text-white shadow-2xs"
+                    : "bg-white dark:bg-zinc-700 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 text-blue-600 dark:text-blue-300 shadow-2xs"
                 }`}
               >
                 +15m
@@ -1135,30 +1132,37 @@ export default function Home() {
             </div>
 
             {/* Voice Call */}
-            <button
-              onClick={() => handleStartCall("audio")}
-              disabled={!connected || isExpired || isInCall}
-              title="Voice Call"
-              className="p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
-            >
-              <Phone className="w-4 h-4" />
-            </button>
+            {connected && (
+              <button
+                type="button"
+                onClick={() => handleStartCall("audio")}
+                disabled={isExpired || isInCall}
+                title="Voice Call"
+                className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
+              >
+                <Phone className="w-4 h-4" />
+              </button>
+            )}
 
             {/* Video Call */}
-            <button
-              onClick={() => handleStartCall("video")}
-              disabled={!connected || isExpired || isInCall}
-              title="Video Call"
-              className="p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
-            >
-              <Video className="w-4 h-4" />
-            </button>
+            {connected && (
+              <button
+                type="button"
+                onClick={() => handleStartCall("video")}
+                disabled={isExpired || isInCall}
+                title="Video Call"
+                className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
+              >
+                <Video className="w-4 h-4" />
+              </button>
+            )}
 
             {/* QR Invite */}
             <button
+              type="button"
               onClick={() => setIsQrModalOpen(true)}
               title="Show QR Code"
-              className="p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
             >
               <QrCode className="w-4 h-4" />
             </button>
@@ -1167,7 +1171,7 @@ export default function Home() {
             <button
               type="button"
               onClick={toggleTheme}
-              className="p-2 rounded-full text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             >
               {theme === "dark" ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-zinc-700" />}
@@ -1175,9 +1179,10 @@ export default function Home() {
 
             {/* Exit Room */}
             <button
+              type="button"
               onClick={() => setIsEndModalOpen(true)}
               title="Leave Room"
-              className="p-2 rounded-full text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors ml-1"
+              className="p-1.5 sm:p-2 rounded-full text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -1187,10 +1192,10 @@ export default function Home() {
         {/* Message Feed */}
         <main
           ref={messageListRef}
-          className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3 bg-zinc-50 dark:bg-zinc-950 overscroll-contain text-sm"
+          className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 bg-zinc-100/70 dark:bg-zinc-950 overscroll-contain text-sm"
         >
           {!connected && (
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 text-center max-w-sm mx-auto my-8 shadow-xs space-y-3">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 sm:p-6 text-center max-w-sm mx-auto my-6 sm:my-8 shadow-xs space-y-3">
               <div className="w-12 h-12 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center mx-auto">
                 <Users className="w-6 h-6" />
               </div>
@@ -1200,12 +1205,14 @@ export default function Home() {
               </p>
               <div className="flex gap-2 justify-center pt-2">
                 <button
+                  type="button"
                   onClick={() => setIsQrModalOpen(true)}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium shadow-xs transition-colors"
                 >
                   <QrCode className="w-3.5 h-3.5" /> Show QR
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
                     navigator.clipboard.writeText(inviteUrl);
                     toast.success("Invite link copied to clipboard");
@@ -1238,10 +1245,10 @@ export default function Home() {
                     )}
 
                     <div
-                      className={`max-w-[82%] px-4 py-2.5 rounded-2xl shadow-xs transition-all ${
+                      className={`max-w-[85%] sm:max-w-[80%] px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl shadow-xs transition-all ${
                         isOwn
                           ? "bg-blue-600 text-white rounded-br-xs"
-                          : "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-xs"
+                          : "bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-xs"
                       }`}
                     >
                       <p className="whitespace-pre-wrap leading-relaxed text-sm break-words">{item.body}</p>
@@ -1288,10 +1295,10 @@ export default function Home() {
                     )}
 
                     <div
-                      className={`p-3 rounded-2xl shadow-xs border ${
+                      className={`p-2.5 sm:p-3 rounded-2xl shadow-xs border ${
                         isOwn
-                          ? "bg-blue-600/10 border-blue-500/20 text-zinc-900 dark:text-zinc-100 rounded-br-xs"
-                          : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-xs"
+                          ? "bg-blue-600/10 border-blue-500/20 text-blue-950 dark:text-blue-100 rounded-br-xs"
+                          : "bg-white dark:bg-zinc-900 border-zinc-200/80 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-xs"
                       }`}
                     >
                       {item.kind === "voice" ? (
@@ -1301,7 +1308,7 @@ export default function Home() {
                             <span>Voice message expired</span>
                           </div>
                         ) : (
-                          <div className="flex flex-col gap-1.5 min-w-[220px]">
+                          <div className="flex flex-col gap-1.5 min-w-[200px] sm:min-w-[220px]">
                             <audio
                               controls
                               controlsList="nodownload"
@@ -1327,8 +1334,9 @@ export default function Home() {
                         </div>
                       ) : (
                         <button
+                          type="button"
                           onClick={() => openViewOncePhoto(item)}
-                          className="flex items-center gap-2 px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs shadow-xs transition-colors"
+                          className="flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs shadow-xs transition-colors"
                         >
                           <Eye className="w-4 h-4" /> View photo (once)
                         </button>
@@ -1350,13 +1358,15 @@ export default function Home() {
 
         {/* Floating preview for selected photo */}
         {selectedPhoto && (
-          <div className="flex items-center justify-between px-4 py-2 bg-blue-50 dark:bg-blue-950/40 border-t border-blue-200 dark:border-blue-900/50 text-xs text-blue-900 dark:text-blue-200">
-            <span className="flex items-center gap-2 font-medium">
-              <ImageIcon className="w-4 h-4" /> Photo attached (view-once)
+          <div className="flex items-center justify-between px-3 sm:px-4 py-2 bg-blue-50 dark:bg-blue-950/40 border-t border-blue-200 dark:border-blue-900/50 text-xs text-blue-900 dark:text-blue-200">
+            <span className="flex items-center gap-1.5 font-medium truncate">
+              <ImageIcon className="w-4 h-4 shrink-0" />
+              <span className="truncate">Photo attached (view-once)</span>
             </span>
             <button
+              type="button"
               onClick={() => setSelectedPhoto(null)}
-              className="text-red-500 hover:text-red-600 p-1 rounded-full font-bold"
+              className="text-red-500 hover:text-red-600 p-1 rounded-full font-bold shrink-0 ml-2"
               aria-label="Remove photo"
             >
               <X className="w-4 h-4" />
@@ -1365,30 +1375,32 @@ export default function Home() {
         )}
 
         {/* Input Bar */}
-        <footer className="p-3 sm:p-4 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
+        <footer className="p-2.5 sm:p-3 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 shrink-0 pb-[calc(0.6rem+env(safe-area-inset-bottom))]">
           {isRecording ? (
-            <div className="flex items-center justify-between gap-3 p-2 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 text-xs">
-              <span className="flex items-center gap-2 font-medium pl-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse" />
-                Recording voice note... ({String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:{String(recordingSeconds % 60).padStart(2, "0")})
+            <div className="flex items-center justify-between gap-2 p-2 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 text-xs">
+              <span className="flex items-center gap-1.5 font-medium pl-1 truncate">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse shrink-0" />
+                <span className="truncate">Recording... ({String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:{String(recordingSeconds % 60).padStart(2, "0")})</span>
               </span>
-              <div className="flex gap-2">
+              <div className="flex gap-1.5 shrink-0">
                 <button
+                  type="button"
                   onClick={cancelRecording}
-                  className="px-3 py-1.5 rounded-full border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 text-xs font-medium hover:bg-red-100 dark:hover:bg-red-900/40"
+                  className="px-2.5 py-1 rounded-full border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 text-xs font-medium hover:bg-red-100 dark:hover:bg-red-900/40"
                 >
                   Cancel
                 </button>
                 <button
+                  type="button"
                   onClick={stopAndSendRecording}
-                  className="px-4 py-1.5 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-medium shadow-xs"
+                  className="px-3.5 py-1 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-medium shadow-xs"
                 >
                   Send
                 </button>
               </div>
             </div>
           ) : (
-            <div className="flex items-center gap-2 max-w-2xl mx-auto w-full">
+            <div className="flex items-center gap-1.5 sm:gap-2 max-w-2xl mx-auto w-full">
               <input
                 id="photo-upload-input"
                 type="file"
@@ -1404,20 +1416,20 @@ export default function Home() {
                 type="button"
                 disabled={!connected || isExpired}
                 onClick={() => document.getElementById("photo-upload-input")?.click()}
-                className="p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors"
+                className="p-2 sm:p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors shrink-0"
                 title="Send view-once photo"
               >
-                <ImageIcon className="w-5 h-5" />
+                <ImageIcon className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
 
               <button
                 type="button"
                 disabled={!connected || isExpired}
                 onClick={startRecording}
-                className="p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors"
+                className="p-2 sm:p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors shrink-0"
                 title="Record voice note"
               >
-                <Mic className="w-5 h-5" />
+                <Mic className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
 
               <div className="flex-1 min-w-0">
@@ -1433,14 +1445,15 @@ export default function Home() {
                   }}
                   disabled={!connected || isExpired}
                   placeholder={connected ? "Type a message..." : "Waiting for friend to connect..."}
-                  className="w-full bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 rounded-full px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  className="w-full bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 rounded-full px-3.5 sm:px-4 py-2 sm:py-2.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                 />
               </div>
 
               <button
+                type="button"
                 onClick={() => void send()}
                 disabled={!connected || isExpired || (!message.trim() && !selectedPhoto)}
-                className="p-2.5 rounded-full bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white shadow-xs transition-colors flex items-center justify-center shrink-0"
+                className="p-2 sm:p-2.5 rounded-full bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white shadow-xs transition-colors flex items-center justify-center shrink-0"
                 title="Send"
               >
                 <Send className="w-4 h-4" />

@@ -101,11 +101,11 @@ export const CallModal: React.FC<CallModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-md select-none transition-all">
-      <div className="relative flex flex-col w-full max-w-xl h-[80vh] max-h-[640px] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-6 bg-black/80 backdrop-blur-md select-none transition-all">
+      <div className="relative flex flex-col w-full max-w-xl h-[88vh] sm:h-[80vh] max-h-[640px] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 bg-zinc-50 dark:bg-zinc-900/90 border-b border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 bg-zinc-50 dark:bg-zinc-900/90 border-b border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100">
+          <div className="flex items-center gap-2 sm:gap-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
             <span className="text-sm font-semibold tracking-tight">
               {kind === "video" ? "Video Call" : "Voice Call"}
@@ -151,7 +151,7 @@ export const CallModal: React.FC<CallModalProps> = ({
               </div>
 
               {localStream && !isCamOff && (
-                <div className="absolute top-4 right-4 w-28 h-36 sm:w-32 sm:h-44 rounded-2xl border-2 border-white/20 bg-zinc-900 shadow-xl overflow-hidden z-10">
+                <div className="absolute top-3 right-3 sm:top-4 sm:right-4 w-24 h-32 sm:w-32 sm:h-44 rounded-2xl border-2 border-white/20 bg-zinc-900 shadow-xl overflow-hidden z-10">
                   <video
                     ref={localVideoRef}
                     autoPlay
@@ -165,8 +165,8 @@ export const CallModal: React.FC<CallModalProps> = ({
           )}
 
           {kind === "audio" && (
-            <div className="flex flex-col items-center justify-center gap-4 text-center p-8">
-              <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-3xl font-bold text-white shadow-xl ring-4 ring-white/10">
+            <div className="flex flex-col items-center justify-center gap-4 text-center p-6 sm:p-8">
+              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-2xl sm:text-3xl font-bold text-white shadow-xl ring-4 ring-white/10">
                 {partnerAlias.slice(0, 2).toUpperCase()}
               </div>
 
@@ -192,53 +192,58 @@ export const CallModal: React.FC<CallModalProps> = ({
         </div>
 
         {/* Controls */}
-        <div className="flex items-center justify-center gap-4 px-6 py-4 bg-zinc-50 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800">
+        <div className="flex items-center justify-center gap-2.5 sm:gap-4 px-3 sm:px-6 py-3 sm:py-4 bg-zinc-50 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800">
           {callStatus === "ringing" && !isInitiator ? (
-            <div className="flex items-center gap-5">
+            <div className="flex items-center gap-3 sm:gap-5">
               <button
+                type="button"
                 onClick={onReject}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 font-medium text-xs transition-colors"
+                className="flex items-center gap-1.5 sm:gap-2 px-4 sm:px-5 py-2 sm:py-2.5 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 font-medium text-xs transition-colors"
               >
                 <PhoneOff className="w-4 h-4" /> Decline
               </button>
               <button
+                type="button"
                 onClick={onAccept}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-md transition-all animate-pulse"
+                className="flex items-center gap-1.5 sm:gap-2 px-5 sm:px-6 py-2 sm:py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-md transition-all animate-pulse"
               >
                 <Phone className="w-4 h-4" /> Accept
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
+                type="button"
                 onClick={onToggleMic}
-                className={`flex items-center justify-center w-11 h-11 rounded-full border transition-all ${
+                className={`flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 rounded-full border transition-all ${
                   isMicMuted
                     ? "bg-red-500/10 border-red-500/30 text-red-500"
                     : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700"
                 }`}
                 title={isMicMuted ? "Unmute microphone" : "Mute microphone"}
               >
-                {isMicMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                {isMicMuted ? <MicOff className="w-4 h-4 sm:w-5 sm:h-5" /> : <Mic className="w-4 h-4 sm:w-5 sm:h-5" />}
               </button>
 
               {kind === "video" && (
                 <button
+                  type="button"
                   onClick={onToggleCam}
-                  className={`flex items-center justify-center w-11 h-11 rounded-full border transition-all ${
+                  className={`flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 rounded-full border transition-all ${
                     isCamOff
                       ? "bg-red-500/10 border-red-500/30 text-red-500"
                       : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700"
                   }`}
                   title={isCamOff ? "Turn on camera" : "Turn off camera"}
                 >
-                  {isCamOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+                  {isCamOff ? <VideoOff className="w-4 h-4 sm:w-5 sm:h-5" /> : <Video className="w-4 h-4 sm:w-5 sm:h-5" />}
                 </button>
               )}
 
               <button
+                type="button"
                 onClick={onHangup}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-md transition-all ml-2"
+                className="flex items-center gap-1.5 sm:gap-2 px-4 sm:px-5 py-2 sm:py-2.5 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-md transition-all ml-1 sm:ml-2"
               >
                 <PhoneOff className="w-4 h-4" /> End Call
               </button>
