@@ -1,0 +1,24 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    # Runs every 14 minutes to prevent Render free tier from sleeping (15-min idle timeout)
+    - cron: '*/14 * * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render Service
+        env:
+          TARGET_URL: ${{ secrets.RENDER_APP_URL || 'https://veilchat.onrender.com' }}
+        run: |
+          echo "Pinging ${TARGET_URL}/api/health..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "${TARGET_URL}/api/health" || echo "failed")
+          echo "Response code: $STATUS"
+          if [ "$STATUS" = "200" ]; then
+            echo "Render service is awake and active!"
+          else
+            echo "Ping delivered (service returned $STATUS), activity registered with Render."
+          fi

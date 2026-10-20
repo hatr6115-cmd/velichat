@@ -47,6 +47,19 @@ async function startServer() {
   registerStorageProxy(app);
   registerOAuthRoutes(app);
 
+  // Health check endpoint for keep-alive pings and uptime monitors
+  app.get("/api/health", (_req, res) => {
+    res.status(200).json({ status: "ok", timestamp: Date.now() });
+  });
+
+  // Self-ping to keep Render or cloud container awake while active
+  const externalUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL;
+  if (externalUrl) {
+    setInterval(() => {
+      fetch(`${externalUrl.replace(/\/$/, "")}/api/health`).catch(() => {});
+    }, 10 * 60 * 1000);
+  }
+
   // Real-time zero-persistence SSE stream endpoint
   app.get("/api/temporary/stream", (req, res) => {
     const roomId = String(req.query.roomId || "");
