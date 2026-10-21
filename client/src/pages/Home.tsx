@@ -155,6 +155,7 @@ export default function Home() {
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const processedSignalIdsRef = useRef<Set<string>>(new Set());
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const callActiveOnServerRef = useRef(false);
 
   // Real-time SSE Stream
   const { data: sseData, isConnected: isSseConnected } = useRoomStream({
@@ -276,6 +277,7 @@ export default function Home() {
   };
 
   const cleanupCall = () => {
+    callActiveOnServerRef.current = false;
     if (localStream) {
       localStream.getTracks().forEach((t) => t.stop());
       setLocalStream(null);
@@ -542,6 +544,11 @@ export default function Home() {
   useEffect(() => {
     if (!session || !room) return;
 
+    // Track active call state on server
+    if (room.call) {
+      callActiveOnServerRef.current = true;
+    }
+
     // Detect incoming call for non-initiator
     if (room.call && room.call.initiatorId !== session.memberId && !isInCall) {
       setIsInCall(true);
@@ -549,8 +556,9 @@ export default function Home() {
       setCallStatus("ringing");
     }
 
-    // Call was terminated remotely
-    if (!room.call && isInCall && callStatus !== "ended") {
+    // Call was confirmed active on server, and is now terminated remotely
+    if (callActiveOnServerRef.current && !room.call && isInCall && callStatus !== "ended") {
+      callActiveOnServerRef.current = false;
       cleanupCall();
       toast.info("CALL_TERMINATED");
       return;

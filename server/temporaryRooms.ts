@@ -70,6 +70,7 @@ export type RoomSnapshot = {
   roomId: string;
   expiresAt: number;
   hostAlias: string;
+  guestAlias?: string;
   guestAliases: string[];
   currentMemberId: string;
   currentAlias: string;
@@ -207,6 +208,7 @@ function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
     roomId: room.id,
     expiresAt: room.expiresAt,
     hostAlias: room.host.alias,
+    guestAlias: room.guests[0]?.alias,
     guestAliases: room.guests.map(g => g.alias),
     currentMemberId,
     currentAlias: current.alias,
@@ -522,11 +524,8 @@ export function endTemporaryCall(roomId: string, inviteToken: string, memberId: 
   const room = requireRoom(roomId, inviteToken);
   getParticipant(room, memberId);
   if (room.call) {
-    room.call.participants = room.call.participants.filter(id => id !== memberId);
-    if (room.call.participants.length === 0 || room.call.initiatorId === memberId) {
-      room.call = undefined;
-      room.signals = [];
-    }
+    room.call = undefined;
+    room.signals = [];
   }
   const snap = snapshot(room, memberId);
   notifyRoomSubscribers(roomId);
