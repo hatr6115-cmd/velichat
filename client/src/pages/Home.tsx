@@ -212,7 +212,7 @@ export default function Home() {
     }
   }, [room?.participantCount, isQrModalOpen]);
 
-  // WebRTC ICE Servers with high availability public STUNs
+  // WebRTC ICE & TURN Servers with high availability public STUNs & TURN relays
   const iceServers: RTCConfiguration = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
@@ -221,33 +221,56 @@ export default function Home() {
       { urls: "stun:stun3.l.google.com:19302" },
       { urls: "stun:stun4.l.google.com:19302" },
       { urls: "stun:stun.cloudflare.com:3478" },
-      { urls: "stun:openrelay.metered.ca:80" },
+      {
+        urls: [
+          "stun:openrelay.metered.ca:80",
+          "turn:openrelay.metered.ca:80",
+          "turn:openrelay.metered.ca:80?transport=tcp",
+          "turn:openrelay.metered.ca:443",
+          "turn:openrelay.metered.ca:443?transport=tcp",
+        ],
+        username: "openrelay",
+        credential: "openrelay",
+      },
     ],
     iceCandidatePoolSize: 10,
   };
 
   const getMediaStream = async (kind: "audio" | "video"): Promise<MediaStream> => {
-    try {
+    if (kind === "video") {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: {
+            facingMode: "user",
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+          },
+        });
+      } catch (err1) {
+        console.warn("Failed with ideal video constraints, trying basic constraints:", err1);
+        try {
+          return await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: true,
+          });
+        } catch (err2) {
+          console.warn("Camera failed, falling back to audio only:", err2);
+          toast.warning("Camera unavailable, continuing with audio only");
+          return await navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+      }
+    } else {
       return await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
-        video:
-          kind === "video"
-            ? {
-                facingMode: "user",
-                width: { ideal: 640 },
-                height: { ideal: 480 },
-              }
-            : false,
-      });
-    } catch (err) {
-      console.warn("Failed with ideal constraints, trying basic constraints:", err);
-      return await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: kind === "video",
       });
     }
   };
@@ -289,16 +312,14 @@ export default function Home() {
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       pc.ontrack = (event) => {
-        console.log("[WebRTC Caller] ontrack:", event.track.kind);
-        if (event.streams && event.streams[0]) {
-          setRemoteStream(event.streams[0]);
-        } else {
-          setRemoteStream((prev) => {
-            const s = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
+        console.log("[WebRTC Caller] ontrack:", event.track.kind, event.track.id);
+        setRemoteStream((prev) => {
+          const s = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
+          if (!s.getTracks().some((t) => t.id === event.track.id)) {
             s.addTrack(event.track);
-            return s;
-          });
-        }
+          }
+          return s;
+        });
         setCallStatus("connected");
       };
 
@@ -312,6 +333,13 @@ export default function Home() {
             type: "ice",
             payload: JSON.stringify(event.candidate),
           });
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        console.log("[WebRTC Caller] iceConnectionState:", pc.iceConnectionState);
+        if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+          setCallStatus("connected");
         }
       };
 
@@ -367,16 +395,14 @@ export default function Home() {
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       pc.ontrack = (event) => {
-        console.log("[WebRTC Receiver] ontrack:", event.track.kind);
-        if (event.streams && event.streams[0]) {
-          setRemoteStream(event.streams[0]);
-        } else {
-          setRemoteStream((prev) => {
-            const s = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
+        console.log("[WebRTC Receiver] ontrack:", event.track.kind, event.track.id);
+        setRemoteStream((prev) => {
+          const s = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
+          if (!s.getTracks().some((t) => t.id === event.track.id)) {
             s.addTrack(event.track);
-            return s;
-          });
-        }
+          }
+          return s;
+        });
         setCallStatus("connected");
       };
 
@@ -390,6 +416,13 @@ export default function Home() {
             type: "ice",
             payload: JSON.stringify(event.candidate),
           });
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        console.log("[WebRTC Receiver] iceConnectionState:", pc.iceConnectionState);
+        if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+          setCallStatus("connected");
         }
       };
 
@@ -525,29 +558,42 @@ export default function Home() {
 
     const pc = peerConnectionRef.current;
 
+    // Helper: Safely apply remote answer description once
+    const applyRemoteAnswer = async (answerPayload: string) => {
+      const activePc = peerConnectionRef.current;
+      if (!activePc || activePc.remoteDescription || activePc.signalingState !== "have-local-offer") {
+        return;
+      }
+      try {
+        console.log("[WebRTC] Applying remote answer description");
+        const answerDesc = JSON.parse(answerPayload);
+        await activePc.setRemoteDescription(new RTCSessionDescription(answerDesc));
+        setCallStatus("connected");
+
+        // Flush queued ICE candidates
+        for (const candidate of pendingIceCandidatesRef.current) {
+          try {
+            await activePc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (e) {
+            console.warn("[WebRTC] Error adding queued candidate:", e);
+          }
+        }
+        pendingIceCandidatesRef.current = [];
+      } catch (err) {
+        console.error("[WebRTC] Error applying answer remote description:", err);
+      }
+    };
+
     // Caller: if answer is attached to room.call but pc has no remoteDescription yet
     if (
       room.call &&
       room.call.initiatorId === session.memberId &&
       room.call.answer &&
       pc &&
-      !pc.remoteDescription
+      !pc.remoteDescription &&
+      pc.signalingState === "have-local-offer"
     ) {
-      (async () => {
-        try {
-          console.log("[WebRTC Caller] applying answer from room.call.answer");
-          const answerDesc = JSON.parse(room.call!.answer!);
-          await pc.setRemoteDescription(new RTCSessionDescription(answerDesc));
-          setCallStatus("connected");
-
-          for (const candidate of pendingIceCandidatesRef.current) {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn);
-          }
-          pendingIceCandidatesRef.current = [];
-        } catch (e) {
-          console.error("Error setting answer from call object:", e);
-        }
-      })();
+      void applyRemoteAnswer(room.call.answer);
     }
 
     // Receiver: if accepted and offer arrives after accept
@@ -556,10 +602,12 @@ export default function Home() {
       room.call.initiatorId !== session.memberId &&
       room.call.offer &&
       pc &&
-      !pc.remoteDescription
+      !pc.remoteDescription &&
+      pc.signalingState === "stable"
     ) {
       (async () => {
         try {
+          if (pc.remoteDescription || pc.signalingState !== "stable") return;
           console.log("[WebRTC Receiver] applying offer from room.call.offer");
           const offerDesc = JSON.parse(room.call!.offer!);
           await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
@@ -594,24 +642,16 @@ export default function Home() {
           if (processedSignalIdsRef.current.has(signal.id)) continue;
           processedSignalIdsRef.current.add(signal.id);
 
+          // CRITICAL: Do NOT process our own outgoing signals!
+          if (signal.senderId === session.memberId) continue;
+
+          // Skip signals targeted at another specific participant
+          if (signal.receiverId && signal.receiverId !== "all" && signal.receiverId !== session.memberId) continue;
+
           const currentPc = peerConnectionRef.current;
 
           if (signal.type === "answer" && currentPc) {
-            try {
-              if (!currentPc.remoteDescription) {
-                console.log("[WebRTC] Applying answer signal");
-                const answerDesc = JSON.parse(signal.payload);
-                await currentPc.setRemoteDescription(new RTCSessionDescription(answerDesc));
-                setCallStatus("connected");
-
-                for (const candidate of pendingIceCandidatesRef.current) {
-                  await currentPc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn);
-                }
-                pendingIceCandidatesRef.current = [];
-              }
-            } catch (e) {
-              console.error("Error setting answer signal:", e);
-            }
+            await applyRemoteAnswer(signal.payload);
           } else if (signal.type === "ice") {
             try {
               const candidateInit = JSON.parse(signal.payload);

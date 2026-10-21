@@ -44,17 +44,14 @@ export const CallModal: React.FC<CallModalProps> = ({
       localVideoRef.current.srcObject = localStream;
       localVideoRef.current.play().catch((e) => console.warn("Local play error:", e));
     }
-  }, [localStream]);
+  }, [localStream, isCamOff]);
 
   useEffect(() => {
     const video = remoteVideoRef.current;
     if (video && remoteStream && kind === "video") {
       video.srcObject = remoteStream;
-      video.play().then(() => {
-        setNeedsUserTap(false);
-      }).catch((err) => {
-        console.warn("Autoplay was prevented on remote video:", err);
-        setNeedsUserTap(true);
+      video.play().catch((err) => {
+        console.warn("Remote video play error:", err);
       });
     }
   }, [remoteStream, kind]);
@@ -73,13 +70,12 @@ export const CallModal: React.FC<CallModalProps> = ({
   }, [remoteStream, kind]);
 
   const handleManualPlay = () => {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.play().then(() => setNeedsUserTap(false)).catch(console.warn);
+    }
     if (remoteVideoRef.current) {
       remoteVideoRef.current.play().catch(console.warn);
     }
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.play().catch(console.warn);
-    }
-    setNeedsUserTap(false);
   };
 
   useEffect(() => {
@@ -133,6 +129,7 @@ export const CallModal: React.FC<CallModalProps> = ({
                   ref={remoteVideoRef}
                   autoPlay
                   playsInline
+                  muted
                   className={`w-full h-full object-cover ${remoteStream ? "block" : "hidden"}`}
                 />
                 {!remoteStream && (
