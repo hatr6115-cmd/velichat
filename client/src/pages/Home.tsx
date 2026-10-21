@@ -159,6 +159,8 @@ export default function Home() {
   const processedSignalIdsRef = useRef<Set<string>>(new Set());
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const callActiveOnServerRef = useRef(false);
+  const lastCallSnapshotAtRef = useRef<number | null>(null);
+  const missingCallTimerRef = useRef<number | undefined>(undefined);
   const isApplyingAnswerRef = useRef(false);
   const hasAnsweredOfferRef = useRef(false);
   const isAcceptingCallRef = useRef(false);
@@ -282,8 +284,29 @@ export default function Home() {
     }
   };
 
+  const handleRemoteTrack = (event: RTCTrackEvent, role: "Caller" | "Receiver") => {
+    const stream = remoteStreamRef.current || new MediaStream();
+    if (!stream.getTracks().some((track) => track.id === event.track.id)) {
+      stream.addTrack(event.track);
+    }
+    remoteStreamRef.current = stream;
+    setRemoteStream(new MediaStream(stream.getTracks()));
+    setCallStatus("connected");
+    console.log(`[WebRTC ${role}] ontrack:`, event.track.kind, event.track.id);
+
+    event.track.onunmute = () => {
+      console.log(`[WebRTC ${role}] Track unmuted:`, event.track.kind);
+      setRemoteStream(new MediaStream(stream.getTracks()));
+    };
+  };
+
   const cleanupCall = () => {
     callActiveOnServerRef.current = false;
+    lastCallSnapshotAtRef.current = null;
+    if (missingCallTimerRef.current) {
+      window.clearTimeout(missingCallTimerRef.current);
+      missingCallTimerRef.current = undefined;
+    }
     isApplyingAnswerRef.current = false;
     hasAnsweredOfferRef.current = false;
     isAcceptingCallRef.current = false;
@@ -339,26 +362,7 @@ export default function Home() {
 
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
-      pc.ontrack = (event) => {
-        console.log("[WebRTC Caller] ontrack:", event.track.kind, event.track.id);
-        let targetStream: MediaStream;
-        if (event.streams && event.streams[0]) {
-          targetStream = event.streams[0];
-        } else {
-          targetStream = remoteStreamRef.current || new MediaStream();
-          if (!targetStream.getTracks().some((t) => t.id === event.track.id)) {
-            targetStream.addTrack(event.track);
-          }
-        }
-        remoteStreamRef.current = targetStream;
-        setRemoteStream(new MediaStream(targetStream.getTracks()));
-        setCallStatus("connected");
-
-        event.track.onunmute = () => {
-          console.log("[WebRTC Caller] Track unmuted:", event.track.kind);
-          setRemoteStream((prev) => (prev ? new MediaStream(prev.getTracks()) : targetStream));
-        };
-      };
+      pc.ontrack = (event) => handleRemoteTrack(event, "Caller");
 
       pc.onicecandidate = (event) => {
         if (event.candidate && session) {
@@ -435,26 +439,7 @@ export default function Home() {
       const pc = new RTCPeerConnection(iceServers);
       peerConnectionRef.current = pc;
 
-      pc.ontrack = (event) => {
-        console.log("[WebRTC Receiver] ontrack:", event.track.kind, event.track.id);
-        let targetStream: MediaStream;
-        if (event.streams && event.streams[0]) {
-          targetStream = event.streams[0];
-        } else {
-          targetStream = remoteStreamRef.current || new MediaStream();
-          if (!targetStream.getTracks().some((t) => t.id === event.track.id)) {
-            targetStream.addTrack(event.track);
-          }
-        }
-        remoteStreamRef.current = targetStream;
-        setRemoteStream(new MediaStream(targetStream.getTracks()));
-        setCallStatus("connected");
-
-        event.track.onunmute = () => {
-          console.log("[WebRTC Receiver] Track unmuted:", event.track.kind);
-          setRemoteStream((prev) => (prev ? new MediaStream(prev.getTracks()) : targetStream));
-        };
-      };
+      pc.ontrack = (event) => handleRemoteTrack(event, "Receiver");
 
       pc.onicecandidate = (event) => {
         if (event.candidate && session) {
@@ -618,6 +603,11 @@ export default function Home() {
     // Track active call state on server
     if (room.call) {
       callActiveOnServerRef.current = true;
+      lastCallSnapshotAtRef.current = Date.now();
+      if (missingCallTimerRef.current) {
+        window.clearTimeout(missingCallTimerRef.current);
+        missingCallTimerRef.current = undefined;
+      }
     }
 
     // Detect incoming call for non-initiator
@@ -630,10 +620,16 @@ export default function Home() {
 
     // Call was confirmed active on server, and is now terminated remotely
     if (callActiveOnServerRef.current && !room.call && isInCall && callStatus !== "ended") {
-      callActiveOnServerRef.current = false;
-      cleanupCall();
-      toast.info("CALL_TERMINATED");
-      return;
+      if (!missingCallTimerRef.current) {
+        missingCallTimerRef.current = window.setTimeout(() => {
+          missingCallTimerRef.current = undefined;
+          const lastSeen = lastCallSnapshotAtRef.current;
+          if (callActiveOnServerRef.current && lastSeen && Date.now() - lastSeen >= 5_000) {
+            cleanupCall();
+            toast.info("CALL_TERMINATED");
+          }
+        }, 5_000);
+      }
     }
 
     const pc = peerConnectionRef.current;
