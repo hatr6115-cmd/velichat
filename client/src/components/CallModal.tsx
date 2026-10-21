@@ -39,21 +39,55 @@ export const CallModal: React.FC<CallModalProps> = ({
   const [callDuration, setCallDuration] = useState(0);
   const [needsUserTap, setNeedsUserTap] = useState(false);
 
+  const hasRemoteVideo = Boolean(
+    remoteStream &&
+    remoteStream.getVideoTracks().length > 0 &&
+    remoteStream.getVideoTracks().some((t) => t.enabled && t.readyState === "live")
+  );
+
   useEffect(() => {
     if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
-      localVideoRef.current.play().catch((e) => console.warn("Local play error:", e));
+      const v = localVideoRef.current;
+      v.muted = true;
+      v.playsInline = true;
+      v.srcObject = localStream;
+      v.play().catch((e) => console.warn("Local play error:", e));
     }
   }, [localStream, isCamOff]);
 
   useEffect(() => {
     const video = remoteVideoRef.current;
     if (video && remoteStream && kind === "video") {
+      video.muted = true;
+      video.playsInline = true;
       video.srcObject = remoteStream;
       video.play().catch((err) => {
         console.warn("Remote video play error:", err);
       });
     }
+  }, [remoteStream, kind, hasRemoteVideo]);
+
+  // Listen to track additions on remote stream
+  useEffect(() => {
+    if (!remoteStream) return;
+    const handleTrackAdded = () => {
+      if (remoteVideoRef.current && kind === "video") {
+        const v = remoteVideoRef.current;
+        v.muted = true;
+        v.playsInline = true;
+        v.srcObject = remoteStream;
+        v.play().catch(console.warn);
+      }
+      if (remoteAudioRef.current) {
+        const a = remoteAudioRef.current;
+        a.srcObject = remoteStream;
+        a.play().catch(console.warn);
+      }
+    };
+    remoteStream.addEventListener("addtrack", handleTrackAdded);
+    return () => {
+      remoteStream.removeEventListener("addtrack", handleTrackAdded);
+    };
   }, [remoteStream, kind]);
 
   useEffect(() => {
@@ -74,6 +108,7 @@ export const CallModal: React.FC<CallModalProps> = ({
       remoteAudioRef.current.play().then(() => setNeedsUserTap(false)).catch(console.warn);
     }
     if (remoteVideoRef.current) {
+      remoteVideoRef.current.muted = true;
       remoteVideoRef.current.play().catch(console.warn);
     }
   };
@@ -130,9 +165,9 @@ export const CallModal: React.FC<CallModalProps> = ({
                   autoPlay
                   playsInline
                   muted
-                  className={`w-full h-full object-cover ${remoteStream ? "block" : "hidden"}`}
+                  className={`w-full h-full object-cover ${hasRemoteVideo ? "block" : "hidden"}`}
                 />
-                {!remoteStream && (
+                {!hasRemoteVideo && (
                   <div className="flex flex-col items-center gap-3 text-zinc-400">
                     <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center text-xl font-bold text-white shadow-lg">
                       {partnerAlias.slice(0, 2).toUpperCase()}

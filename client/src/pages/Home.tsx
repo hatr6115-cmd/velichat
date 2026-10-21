@@ -145,6 +145,7 @@ export default function Home() {
 
   // WebRTC Call States
   const [isInCall, setIsInCall] = useState(false);
+  const [isInitiator, setIsInitiator] = useState(false);
   const [callKind, setCallKind] = useState<"audio" | "video">("video");
   const [callStatus, setCallStatus] = useState<"calling" | "ringing" | "connected" | "ended">("calling");
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -152,10 +153,15 @@ export default function Home() {
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isCamOff, setIsCamOff] = useState(false);
 
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const processedSignalIdsRef = useRef<Set<string>>(new Set());
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const callActiveOnServerRef = useRef(false);
+  const isApplyingAnswerRef = useRef(false);
+  const hasAnsweredOfferRef = useRef(false);
+  const isAcceptingCallRef = useRef(false);
 
   // Real-time SSE Stream
   const { data: sseData, isConnected: isSseConnected } = useRoomStream({
@@ -278,16 +284,34 @@ export default function Home() {
 
   const cleanupCall = () => {
     callActiveOnServerRef.current = false;
+    isApplyingAnswerRef.current = false;
+    hasAnsweredOfferRef.current = false;
+    isAcceptingCallRef.current = false;
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+    }
     if (localStream) {
       localStream.getTracks().forEach((t) => t.stop());
       setLocalStream(null);
     }
     if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
+      try {
+        peerConnectionRef.current.onicecandidate = null;
+        peerConnectionRef.current.ontrack = null;
+        peerConnectionRef.current.onconnectionstatechange = null;
+        peerConnectionRef.current.oniceconnectionstatechange = null;
+        peerConnectionRef.current.close();
+      } catch (e) {
+        console.warn("Error closing RTCPeerConnection:", e);
+      }
       peerConnectionRef.current = null;
     }
+    remoteStreamRef.current = null;
     setRemoteStream(null);
     setIsInCall(false);
+    setIsInitiator(false);
     setCallStatus("ended");
     setIsMicMuted(false);
     setIsCamOff(false);
@@ -302,7 +326,9 @@ export default function Home() {
     }
     try {
       cleanupCall();
+      setIsInitiator(true);
       const stream = await getMediaStream(kind);
+      localStreamRef.current = stream;
       setLocalStream(stream);
       setCallKind(kind);
       setIsInCall(true);
@@ -315,14 +341,23 @@ export default function Home() {
 
       pc.ontrack = (event) => {
         console.log("[WebRTC Caller] ontrack:", event.track.kind, event.track.id);
-        setRemoteStream((prev) => {
-          const s = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
-          if (!s.getTracks().some((t) => t.id === event.track.id)) {
-            s.addTrack(event.track);
+        let targetStream: MediaStream;
+        if (event.streams && event.streams[0]) {
+          targetStream = event.streams[0];
+        } else {
+          targetStream = remoteStreamRef.current || new MediaStream();
+          if (!targetStream.getTracks().some((t) => t.id === event.track.id)) {
+            targetStream.addTrack(event.track);
           }
-          return s;
-        });
+        }
+        remoteStreamRef.current = targetStream;
+        setRemoteStream(new MediaStream(targetStream.getTracks()));
         setCallStatus("connected");
+
+        event.track.onunmute = () => {
+          console.log("[WebRTC Caller] Track unmuted:", event.track.kind);
+          setRemoteStream((prev) => (prev ? new MediaStream(prev.getTracks()) : targetStream));
+        };
       };
 
       pc.onicecandidate = (event) => {
@@ -383,29 +418,42 @@ export default function Home() {
 
   const handleAcceptCall = async () => {
     if (!session || !room?.call) return;
+    if (isAcceptingCallRef.current) return;
+    isAcceptingCallRef.current = true;
+
     try {
       const callData = room.call;
-      const stream = await getMediaStream(callData.kind);
-      setLocalStream(stream);
+      setIsInitiator(false);
       setCallKind(callData.kind);
       setIsInCall(true);
+      setCallStatus("calling");
+
+      const stream = await getMediaStream(callData.kind);
+      localStreamRef.current = stream;
+      setLocalStream(stream);
 
       const pc = new RTCPeerConnection(iceServers);
       peerConnectionRef.current = pc;
 
-      // Add receiver stream tracks so caller receives receiver voice and video
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
       pc.ontrack = (event) => {
         console.log("[WebRTC Receiver] ontrack:", event.track.kind, event.track.id);
-        setRemoteStream((prev) => {
-          const s = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
-          if (!s.getTracks().some((t) => t.id === event.track.id)) {
-            s.addTrack(event.track);
+        let targetStream: MediaStream;
+        if (event.streams && event.streams[0]) {
+          targetStream = event.streams[0];
+        } else {
+          targetStream = remoteStreamRef.current || new MediaStream();
+          if (!targetStream.getTracks().some((t) => t.id === event.track.id)) {
+            targetStream.addTrack(event.track);
           }
-          return s;
-        });
+        }
+        remoteStreamRef.current = targetStream;
+        setRemoteStream(new MediaStream(targetStream.getTracks()));
         setCallStatus("connected");
+
+        event.track.onunmute = () => {
+          console.log("[WebRTC Receiver] Track unmuted:", event.track.kind);
+          setRemoteStream((prev) => (prev ? new MediaStream(prev.getTracks()) : targetStream));
+        };
       };
 
       pc.onicecandidate = (event) => {
@@ -414,7 +462,7 @@ export default function Home() {
             roomId: session.roomId,
             inviteToken: session.inviteToken,
             memberId: session.memberId,
-            receiverId: callData.initiatorId || "all",
+            receiverId: "all",
             type: "ice",
             payload: JSON.stringify(event.candidate),
           });
@@ -435,17 +483,23 @@ export default function Home() {
         }
       };
 
-      await joinCallMutation.mutateAsync({
+      // Notify server we joined the call in background
+      void joinCallMutation.mutateAsync({
         roomId: session.roomId,
         inviteToken: session.inviteToken,
         memberId: session.memberId,
-      });
+      }).catch(console.warn);
 
       const offerPayload = callData.offer || (room.signals || []).find((s) => s.type === "offer")?.payload;
       if (offerPayload) {
+        hasAnsweredOfferRef.current = true;
         const offerDesc = JSON.parse(offerPayload);
         await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
 
+        // Add receiver tracks AFTER setting remote description so transceivers match offer correctly
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+        // Flush any queued ICE candidates
         for (const candidate of pendingIceCandidatesRef.current) {
           try {
             await pc.addIceCandidate(new RTCIceCandidate(candidate));
@@ -462,16 +516,21 @@ export default function Home() {
           roomId: session.roomId,
           inviteToken: session.inviteToken,
           memberId: session.memberId,
-          receiverId: callData.initiatorId,
+          receiverId: "all",
           type: "answer",
           payload: JSON.stringify(answer),
         });
         setCallStatus("connected");
+      } else {
+        // If offer not present yet, add tracks now so they're ready when offer arrives
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
       }
     } catch (err: any) {
       console.error("Failed to accept call:", err);
       toast.error("ERR: FAILED_TO_ACCEPT_CALL");
-      handleRejectCall();
+      cleanupCall();
+    } finally {
+      isAcceptingCallRef.current = false;
     }
   };
 
@@ -491,6 +550,18 @@ export default function Home() {
 
   const handleHangup = async () => {
     if (session) {
+      try {
+        await sendSignalMutation.mutateAsync({
+          roomId: session.roomId,
+          inviteToken: session.inviteToken,
+          memberId: session.memberId,
+          receiverId: "all",
+          type: "end",
+          payload: "{}",
+        });
+      } catch {
+        /* ignore */
+      }
       try {
         await endCallMutation.mutateAsync({
           roomId: session.roomId,
@@ -551,6 +622,7 @@ export default function Home() {
 
     // Detect incoming call for non-initiator
     if (room.call && room.call.initiatorId !== session.memberId && !isInCall) {
+      setIsInitiator(false);
       setIsInCall(true);
       setCallKind(room.call.kind);
       setCallStatus("ringing");
@@ -569,11 +641,15 @@ export default function Home() {
     // Helper: Safely apply remote answer description once
     const applyRemoteAnswer = async (answerPayload: string) => {
       const activePc = peerConnectionRef.current;
-      if (!activePc || activePc.remoteDescription || activePc.signalingState !== "have-local-offer") {
+      if (!activePc || activePc.remoteDescription || isApplyingAnswerRef.current) {
         return;
       }
+      if (activePc.signalingState !== "have-local-offer") {
+        return;
+      }
+      isApplyingAnswerRef.current = true;
       try {
-        console.log("[WebRTC] Applying remote answer description");
+        console.log("[WebRTC Caller] Applying remote answer description");
         const answerDesc = JSON.parse(answerPayload);
         await activePc.setRemoteDescription(new RTCSessionDescription(answerDesc));
         setCallStatus("connected");
@@ -583,12 +659,14 @@ export default function Home() {
           try {
             await activePc.addIceCandidate(new RTCIceCandidate(candidate));
           } catch (e) {
-            console.warn("[WebRTC] Error adding queued candidate:", e);
+            console.warn("[WebRTC Caller] Error adding queued candidate:", e);
           }
         }
         pendingIceCandidatesRef.current = [];
       } catch (err) {
-        console.error("[WebRTC] Error applying answer remote description:", err);
+        console.error("[WebRTC Caller] Error applying answer remote description:", err);
+      } finally {
+        isApplyingAnswerRef.current = false;
       }
     };
 
@@ -610,15 +688,27 @@ export default function Home() {
       room.call.initiatorId !== session.memberId &&
       room.call.offer &&
       pc &&
+      !hasAnsweredOfferRef.current &&
       !pc.remoteDescription &&
       pc.signalingState === "stable"
     ) {
       (async () => {
         try {
-          if (pc.remoteDescription || pc.signalingState !== "stable") return;
-          console.log("[WebRTC Receiver] applying offer from room.call.offer");
+          if (hasAnsweredOfferRef.current || pc.remoteDescription || pc.signalingState !== "stable") return;
+          hasAnsweredOfferRef.current = true;
+          console.log("[WebRTC Receiver] applying offer from room.call.offer in effect");
           const offerDesc = JSON.parse(room.call!.offer!);
           await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
+
+          // Ensure local tracks are attached
+          const currentStream = localStreamRef.current;
+          if (currentStream) {
+            currentStream.getTracks().forEach((track) => {
+              if (!pc.getSenders().some((s) => s.track?.id === track.id)) {
+                pc.addTrack(track, currentStream);
+              }
+            });
+          }
 
           for (const candidate of pendingIceCandidatesRef.current) {
             await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn);
@@ -632,7 +722,7 @@ export default function Home() {
             roomId: session.roomId,
             inviteToken: session.inviteToken,
             memberId: session.memberId,
-            receiverId: room.call!.initiatorId,
+            receiverId: "all",
             type: "answer",
             payload: JSON.stringify(answer),
           });
@@ -671,6 +761,9 @@ export default function Home() {
             } catch (e) {
               console.error("Error adding ice candidate:", e);
             }
+          } else if (signal.type === "end") {
+            cleanupCall();
+            toast.info("CALL_TERMINATED");
           }
         }
       };
@@ -1538,7 +1631,7 @@ export default function Home() {
           <CallModal
             kind={callKind}
             partnerAlias={partnerAlias}
-            isInitiator={room?.call?.initiatorId === session.memberId}
+            isInitiator={isInitiator || room?.call?.initiatorId === session.memberId}
             localStream={localStream}
             remoteStream={remoteStream}
             callStatus={callStatus}
