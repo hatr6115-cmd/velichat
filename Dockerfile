@@ -12,8 +12,6 @@ COPY . .
 
 RUN pnpm build
 
-RUN pnpm prune --prod
-
 FROM node:22-slim AS runner
 
 WORKDIR /app
