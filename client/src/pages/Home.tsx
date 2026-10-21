@@ -114,8 +114,11 @@ export default function Home() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [selectedPhoto, setSelectedPhoto] = useState<{ file: File; dataUrl: string } | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<{ file: File; dataUrl: string } | null>(null);
   const [activePhoto, setActivePhoto] = useState<string | null>(null);
+  const [activeVideo, setActiveVideo] = useState<string | null>(null);
   const [photoCountdown, setPhotoCountdown] = useState(10);
+  const [videoCountdown, setVideoCountdown] = useState(30);
   const [consumedMediaIds, setConsumedMediaIds] = useState<Set<string>>(() => new Set());
 
   // tRPC mutations
@@ -164,6 +167,7 @@ export default function Home() {
   const isApplyingAnswerRef = useRef(false);
   const hasAnsweredOfferRef = useRef(false);
   const isAcceptingCallRef = useRef(false);
+  const callPartnerIdRef = useRef<string | null>(null);
 
   // Real-time SSE Stream
   const { data: sseData, isConnected: isSseConnected } = useRoomStream({
@@ -172,7 +176,6 @@ export default function Home() {
     memberId: session?.memberId || "",
     enabled: Boolean(session),
     onClosed: (reason) => {
-      toast.info(reason || "SESSION_CLOSED");
       setSession(null);
       setInvite(null);
       setLocation("/");
@@ -217,7 +220,6 @@ export default function Home() {
   useEffect(() => {
     if (room?.participantCount === 2 && isQrModalOpen) {
       setIsQrModalOpen(false);
-      toast.success("PEER_CONNECTED");
     }
   }, [room?.participantCount, isQrModalOpen]);
 
@@ -344,7 +346,6 @@ export default function Home() {
 
   const handleStartCall = async (kind: "audio" | "video") => {
     if (!session || !room || room.participantCount < 2) {
-      toast.error("AWAITING_PEER_CONNECTION");
       return;
     }
     try {
@@ -360,7 +361,10 @@ export default function Home() {
       const pc = new RTCPeerConnection(iceServers);
       peerConnectionRef.current = pc;
 
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      // Add transceivers explicitly with sendrecv direction
+      stream.getTracks().forEach((track) => {
+        pc.addTransceiver(track, { direction: "sendrecv", streams: [stream] });
+      });
 
       pc.ontrack = (event) => handleRemoteTrack(event, "Caller");
 
@@ -370,7 +374,7 @@ export default function Home() {
             roomId: session.roomId,
             inviteToken: session.inviteToken,
             memberId: session.memberId,
-            receiverId: "all",
+            receiverId: callPartnerIdRef.current || "all",
             type: "ice",
             payload: JSON.stringify(event.candidate),
           });
@@ -415,7 +419,6 @@ export default function Home() {
       });
     } catch (err: any) {
       console.error("Start call error:", err);
-      toast.error("PERMISSION_DENIED: MEDIA_HARDWARE");
       cleanupCall();
     }
   };
@@ -427,6 +430,8 @@ export default function Home() {
 
     try {
       const callData = room.call;
+      const callerId = callData.initiatorId;
+      callPartnerIdRef.current = callerId;
       setIsInitiator(false);
       setCallKind(callData.kind);
       setIsInCall(true);
@@ -447,7 +452,7 @@ export default function Home() {
             roomId: session.roomId,
             inviteToken: session.inviteToken,
             memberId: session.memberId,
-            receiverId: "all",
+            receiverId: callerId,
             type: "ice",
             payload: JSON.stringify(event.candidate),
           });
@@ -481,8 +486,25 @@ export default function Home() {
         const offerDesc = JSON.parse(offerPayload);
         await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
 
-        // Add receiver tracks AFTER setting remote description so transceivers match offer correctly
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        // Configure transceivers to sendrecv with receiver's local tracks
+        const audioTrack = stream.getAudioTracks()[0];
+        const videoTrack = stream.getVideoTracks()[0];
+
+        pc.getTransceivers().forEach((t) => {
+          if (t.receiver.track.kind === "audio" && audioTrack) {
+            t.sender.replaceTrack(audioTrack);
+            t.direction = "sendrecv";
+          } else if (t.receiver.track.kind === "video" && videoTrack) {
+            t.sender.replaceTrack(videoTrack);
+            t.direction = "sendrecv";
+          }
+        });
+
+        stream.getTracks().forEach((track) => {
+          if (!pc.getSenders().some((s) => s.track?.id === track.id)) {
+            pc.addTrack(track, stream);
+          }
+        });
 
         // Flush any queued ICE candidates
         for (const candidate of pendingIceCandidatesRef.current) {
@@ -501,18 +523,16 @@ export default function Home() {
           roomId: session.roomId,
           inviteToken: session.inviteToken,
           memberId: session.memberId,
-          receiverId: "all",
+          receiverId: callerId,
           type: "answer",
           payload: JSON.stringify(answer),
         });
         setCallStatus("connected");
       } else {
-        // If offer not present yet, add tracks now so they're ready when offer arrives
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
       }
     } catch (err: any) {
       console.error("Failed to accept call:", err);
-      toast.error("ERR: FAILED_TO_ACCEPT_CALL");
       cleanupCall();
     } finally {
       isAcceptingCallRef.current = false;
@@ -590,9 +610,8 @@ export default function Home() {
         memberId: session.memberId,
         minutes,
       });
-      toast.success(`+${minutes}M ADDED_TO_ROOM`);
-    } catch (err: any) {
-      toast.error(err.message || "ERR_EXTENDING_TIME");
+    } catch {
+      /* ignore */
     }
   };
 
@@ -612,6 +631,9 @@ export default function Home() {
 
     // Detect incoming call for non-initiator
     if (room.call && room.call.initiatorId !== session.memberId && !isInCall) {
+      if (room.call.participants.length >= 2 && !room.call.participants.includes(session.memberId)) {
+        return;
+      }
       setIsInitiator(false);
       setIsInCall(true);
       setCallKind(room.call.kind);
@@ -626,7 +648,6 @@ export default function Home() {
           const lastSeen = lastCallSnapshotAtRef.current;
           if (callActiveOnServerRef.current && lastSeen && Date.now() - lastSeen >= 5_000) {
             cleanupCall();
-            toast.info("CALL_TERMINATED");
           }
         }, 5_000);
       }
@@ -635,13 +656,16 @@ export default function Home() {
     const pc = peerConnectionRef.current;
 
     // Helper: Safely apply remote answer description once
-    const applyRemoteAnswer = async (answerPayload: string) => {
+    const applyRemoteAnswer = async (answerPayload: string, senderId?: string) => {
       const activePc = peerConnectionRef.current;
       if (!activePc || activePc.remoteDescription || isApplyingAnswerRef.current) {
         return;
       }
       if (activePc.signalingState !== "have-local-offer") {
         return;
+      }
+      if (senderId) {
+        callPartnerIdRef.current = senderId;
       }
       isApplyingAnswerRef.current = true;
       try {
@@ -675,7 +699,7 @@ export default function Home() {
       !pc.remoteDescription &&
       pc.signalingState === "have-local-offer"
     ) {
-      void applyRemoteAnswer(room.call.answer);
+      void applyRemoteAnswer(room.call.answer, room.call.targetId);
     }
 
     // Receiver: if accepted and offer arrives after accept
@@ -699,6 +723,19 @@ export default function Home() {
           // Ensure local tracks are attached
           const currentStream = localStreamRef.current;
           if (currentStream) {
+            const audioTrack = currentStream.getAudioTracks()[0];
+            const videoTrack = currentStream.getVideoTracks()[0];
+
+            pc.getTransceivers().forEach((t) => {
+              if (t.receiver.track.kind === "audio" && audioTrack) {
+                t.sender.replaceTrack(audioTrack);
+                t.direction = "sendrecv";
+              } else if (t.receiver.track.kind === "video" && videoTrack) {
+                t.sender.replaceTrack(videoTrack);
+                t.direction = "sendrecv";
+              }
+            });
+
             currentStream.getTracks().forEach((track) => {
               if (!pc.getSenders().some((s) => s.track?.id === track.id)) {
                 pc.addTrack(track, currentStream);
@@ -718,7 +755,7 @@ export default function Home() {
             roomId: session.roomId,
             inviteToken: session.inviteToken,
             memberId: session.memberId,
-            receiverId: "all",
+            receiverId: room.call!.initiatorId,
             type: "answer",
             payload: JSON.stringify(answer),
           });
@@ -745,7 +782,7 @@ export default function Home() {
           const currentPc = peerConnectionRef.current;
 
           if (signal.type === "answer" && currentPc) {
-            await applyRemoteAnswer(signal.payload);
+            await applyRemoteAnswer(signal.payload, signal.senderId);
           } else if (signal.type === "ice") {
             try {
               const candidateInit = JSON.parse(signal.payload);
@@ -759,7 +796,6 @@ export default function Home() {
             }
           } else if (signal.type === "end") {
             cleanupCall();
-            toast.info("CALL_TERMINATED");
           }
         }
       };
@@ -868,10 +904,8 @@ export default function Home() {
       const parsed = parseTemporaryInvite(invitePayload);
       setInvite(parsed);
       setError("");
-      toast.success(`INVITE_RESOLVED: ${parsed.hostAlias}`);
     } catch {
       setError("ERR: INVALID_QR_STREAM");
-      toast.error("INVALID_QR");
     }
   };
 
@@ -897,7 +931,6 @@ export default function Home() {
         alias: result.currentAlias,
         invite: roomInvite,
       });
-      toast.success("ROOM_INITIALIZED");
     } catch (cause: any) {
       setError(cause instanceof Error ? cause.message : "ERR_ROOM_GEN_FAILED");
     }
@@ -924,7 +957,6 @@ export default function Home() {
         alias: result.currentAlias,
         invite,
       });
-      toast.success("ROOM_ATTACHED");
     } catch (cause: any) {
       setError(cause instanceof Error ? cause.message : "INVITE_EXPIRED_OR_INVALID");
     }
@@ -1036,9 +1068,23 @@ export default function Home() {
           dataUrl: selectedPhoto.dataUrl,
         });
         setSelectedPhoto(null);
-        toast.success("MEDIA_DISPATCHED (VIEW_ONCE)");
       } catch (cause: any) {
-        toast.error(cause instanceof Error ? cause.message : "ERR_SENDING_MEDIA");
+        console.warn("Error sending photo:", cause);
+      }
+    }
+
+    if (selectedVideo) {
+      try {
+        await sendMedia.mutateAsync({
+          roomId: session.roomId,
+          inviteToken: session.inviteToken,
+          memberId: session.memberId,
+          kind: "video",
+          dataUrl: selectedVideo.dataUrl,
+        });
+        setSelectedVideo(null);
+      } catch (cause: any) {
+        console.warn("Error sending video:", cause);
       }
     }
 
@@ -1059,15 +1105,14 @@ export default function Home() {
         });
         setMessage("");
       } catch (cause: any) {
-        toast.error(cause instanceof Error ? cause.message : "ERR_SENDING_PACKET");
+        console.warn("Error sending message:", cause);
       }
     }
   }
 
   async function startRecording() {
-    if (!session || room?.participantCount !== 2) return;
+    if (!session || (room?.participantCount ?? 1) < 2) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      toast.error("HARDWARE_NOT_SUPPORTED");
       return;
     }
     try {
@@ -1098,9 +1143,8 @@ export default function Home() {
               kind: "voice",
               dataUrl,
             });
-            toast.success("VOICE_PACKET_SENT");
           } catch (cause: any) {
-            toast.error(cause instanceof Error ? cause.message : "VOICE_TRANSMIT_ERR");
+            console.warn("Error transmitting voice note:", cause);
           }
         }
       };
@@ -1114,7 +1158,7 @@ export default function Home() {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
     } catch {
-      toast.error("MIC_ACCESS_DENIED");
+      console.warn("Microphone access denied or error");
     }
   }
 
@@ -1133,7 +1177,6 @@ export default function Home() {
     }
     setIsRecording(false);
     setRecordingSeconds(0);
-    toast.info("RECORDING_ABORTED");
   }
 
   async function handlePhotoFileSelected(file: File | undefined) {
@@ -1141,10 +1184,24 @@ export default function Home() {
     try {
       const dataUrl = await compressImageFile(file);
       setSelectedPhoto({ file, dataUrl });
-      toast.success("PHOTO_ENCRYPTED_FOR_VIEW_ONCE");
     } catch {
-      toast.error("IMAGE_PROCESS_ERR");
+      console.warn("Error processing image file");
     }
+  }
+
+  async function handleVideoFileSelected(file: File | undefined) {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) {
+      alert("Video must be under 25MB");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setSelectedVideo({ file, dataUrl: reader.result });
+      }
+    };
+    reader.readAsDataURL(file);
   }
 
   async function consumeMediaOnce(mediaId: string) {
@@ -1181,6 +1238,25 @@ export default function Home() {
     }, 1000);
   }
 
+  async function openViewOnceVideo(item: { id: string; dataUrl?: string }) {
+    if (!item.dataUrl) return;
+    const url = item.dataUrl;
+    setActiveVideo(url);
+    setVideoCountdown(30);
+    void consumeMediaOnce(item.id);
+
+    const timer = setInterval(() => {
+      setVideoCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setActiveVideo(null);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
   async function endRoom() {
     if (!session) return;
     try {
@@ -1197,7 +1273,6 @@ export default function Home() {
     setAlias("");
     setIsEndModalOpen(false);
     setLocation("/");
-    toast.success("TERMINATED: MEMORY_PURGED");
   }
 
   if (session) {
@@ -1268,12 +1343,20 @@ export default function Home() {
               </button>
             </div>
 
+            {/* Call Active Other Indicator */}
+            {connected && room?.call && room.call.participants.length >= 2 && !room.call.participants.includes(session.memberId) && (
+              <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-medium px-2 py-1 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                Line busy
+              </span>
+            )}
+
             {/* Voice Call */}
             {connected && (
               <button
                 type="button"
                 onClick={() => handleStartCall("audio")}
-                disabled={isExpired || isInCall}
+                disabled={isExpired || isInCall || Boolean(room?.call)}
                 title="Voice Call"
                 className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
               >
@@ -1286,7 +1369,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => handleStartCall("video")}
-                disabled={isExpired || isInCall}
+                disabled={isExpired || isInCall || Boolean(room?.call)}
                 title="Video Call"
                 className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
               >
@@ -1464,19 +1547,36 @@ export default function Home() {
                             )}
                           </div>
                         )
-                      ) : isConsumed ? (
-                        <div className="flex items-center gap-2 text-xs text-zinc-400 italic py-1 px-2">
-                          <Eye className="w-4 h-4 opacity-50" />
-                          <span>Photo already viewed</span>
-                        </div>
+                      ) : item.kind === "photo" ? (
+                        isConsumed ? (
+                          <div className="flex items-center gap-2 text-xs text-zinc-400 italic py-1 px-2">
+                            <Eye className="w-4 h-4 opacity-50" />
+                            <span>Photo already viewed</span>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openViewOncePhoto(item)}
+                            className="flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs shadow-xs transition-colors"
+                          >
+                            <Eye className="w-4 h-4" /> View photo (once)
+                          </button>
+                        )
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => openViewOncePhoto(item)}
-                          className="flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs shadow-xs transition-colors"
-                        >
-                          <Eye className="w-4 h-4" /> View photo (once)
-                        </button>
+                        isConsumed ? (
+                          <div className="flex items-center gap-2 text-xs text-zinc-400 italic py-1 px-2">
+                            <Video className="w-4 h-4 opacity-50" />
+                            <span>Video already viewed</span>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openViewOnceVideo(item)}
+                            className="flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs shadow-xs transition-colors"
+                          >
+                            <Video className="w-4 h-4" /> Watch video (once)
+                          </button>
+                        )
                       )}
                     </div>
                   </div>
@@ -1505,6 +1605,24 @@ export default function Home() {
               onClick={() => setSelectedPhoto(null)}
               className="text-red-500 hover:text-red-600 p-1 rounded-full font-bold shrink-0 ml-2"
               aria-label="Remove photo"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Floating preview for selected video */}
+        {selectedVideo && (
+          <div className="flex items-center justify-between px-3 sm:px-4 py-2 bg-blue-50 dark:bg-blue-950/40 border-t border-blue-200 dark:border-blue-900/50 text-xs text-blue-900 dark:text-blue-200">
+            <span className="flex items-center gap-1.5 font-medium truncate">
+              <Video className="w-4 h-4 shrink-0" />
+              <span className="truncate">Video attached (view-once)</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedVideo(null)}
+              className="text-red-500 hover:text-red-600 p-1 rounded-full font-bold shrink-0 ml-2"
+              aria-label="Remove video"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1559,6 +1677,27 @@ export default function Home() {
                 <ImageIcon className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
 
+              <input
+                id="video-upload-input"
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={(e) => {
+                  void handleVideoFileSelected(e.target.files?.[0]);
+                  e.currentTarget.value = "";
+                }}
+              />
+
+              <button
+                type="button"
+                disabled={!connected || isExpired}
+                onClick={() => document.getElementById("video-upload-input")?.click()}
+                className="p-2 sm:p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors shrink-0"
+                title="Send view-once video"
+              >
+                <Video className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+
               <button
                 type="button"
                 disabled={!connected || isExpired}
@@ -1589,7 +1728,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => void send()}
-                disabled={!connected || isExpired || (!message.trim() && !selectedPhoto)}
+                disabled={!connected || isExpired || (!message.trim() && !selectedPhoto && !selectedVideo)}
                 className="p-2 sm:p-2.5 rounded-full bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white shadow-xs transition-colors flex items-center justify-center shrink-0"
                 title="Send"
               >
@@ -1618,6 +1757,43 @@ export default function Home() {
             </div>
             <div className="rounded-2xl overflow-hidden border border-white/10 max-h-[75vh] shadow-2xl">
               <img src={activePhoto} alt="View once message" className="max-h-[70vh] object-contain" />
+            </div>
+          </div>
+        )}
+
+        {/* View Once Video Overlay */}
+        {activeVideo && (
+          <div
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center p-4 bg-black/95 backdrop-blur-md"
+            onClick={() => setActiveVideo(null)}
+          >
+            <div
+              className="flex items-center justify-between w-full max-w-lg mb-3 text-white text-xs font-medium"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="flex items-center gap-1.5">
+                <Video className="w-4 h-4 text-blue-400" /> Disappears in {videoCountdown}s
+              </span>
+              <button
+                onClick={() => setActiveVideo(null)}
+                className="px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 text-white font-medium"
+              >
+                Close
+              </button>
+            </div>
+            <div
+              className="rounded-2xl overflow-hidden border border-white/10 max-h-[75vh] max-w-lg w-full shadow-2xl bg-black flex items-center justify-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <video
+                src={activeVideo}
+                autoPlay
+                playsInline
+                controls
+                controlsList="nodownload"
+                onEnded={() => setActiveVideo(null)}
+                className="max-h-[70vh] w-full object-contain"
+              />
             </div>
           </div>
         )}

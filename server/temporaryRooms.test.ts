@@ -27,12 +27,13 @@ describe("temporary rooms", () => {
     expect(roomCountForTests()).toBe(1);
   });
 
-  it("accepts one guest and rejects a third participant", () => {
+  it("accepts guests and tracks participants", () => {
     const host = createTemporaryRoom("Host");
     const guest = joinTemporaryRoom(host.roomId, host.inviteToken, "Guest");
     expect(guest.participantCount).toBe(2);
     expect(guest.guestAlias).toBe("Guest");
-    expect(() => joinTemporaryRoom(host.roomId, host.inviteToken, "Third")).toThrow("already has two participants");
+    const third = joinTemporaryRoom(host.roomId, host.inviteToken, "Third");
+    expect(third.participantCount).toBe(3);
   });
 
   it("delivers messages by alias and removes the room on leave", () => {
@@ -71,29 +72,33 @@ describe("temporary rooms", () => {
       sendTemporaryMessage(host.roomId, host.inviteToken, host.currentMemberId, "not yet");
       acknowledgeTemporaryMessages(host.roomId, host.inviteToken, guest.currentMemberId);
       const received = getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).messages;
-      expect(received[0]?.deliveredBy).toBe(guest.currentMemberId);
+      expect(received[0]?.deliveredTo).toContain(guest.currentMemberId);
       markTemporaryMessagesRead(host.roomId, host.inviteToken, guest.currentMemberId, [received[0]!.id]);
       const afterRead = getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).messages;
-      expect(afterRead[0]?.readBy).toBe(guest.currentMemberId);
-      expect(afterRead[1]?.readBy).toBeUndefined();
+      expect(afterRead[0]?.readBy).toContain(guest.currentMemberId);
+      expect(afterRead[1]?.readBy).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("sends voice and photo media that each recipient can consume once", () => {
+  it("sends voice, photo, and video media that each recipient can consume once", () => {
     const host = createTemporaryRoom("Host");
     const guest = joinTemporaryRoom(host.roomId, host.inviteToken, "Guest");
     const voice = sendTemporaryMedia(host.roomId, host.inviteToken, host.currentMemberId, "voice", "data:audio/webm;base64,AAAA");
     const photo = sendTemporaryMedia(host.roomId, host.inviteToken, host.currentMemberId, "photo", "data:image/png;base64,AAAA");
+    const video = sendTemporaryMedia(host.roomId, host.inviteToken, host.currentMemberId, "video", "data:video/mp4;base64,AAAA");
     expect(voice.media[0]?.kind).toBe("voice");
     expect(photo.media[1]?.kind).toBe("photo");
+    expect(video.media[2]?.kind).toBe("video");
     const consumed = consumeTemporaryMedia(host.roomId, host.inviteToken, guest.currentMemberId, voice.media[0]!.id);
     expect(consumed.media.find((item) => item.id === voice.media[0]!.id)?.dataUrl).toBeUndefined();
     expect(() => consumeTemporaryMedia(host.roomId, host.inviteToken, guest.currentMemberId, voice.media[0]!.id)).toThrow("no longer available");
     expect(() => consumeTemporaryMedia(host.roomId, host.inviteToken, host.currentMemberId, photo.media[1]!.id)).toThrow("Only the recipient");
     const photoConsumed = consumeTemporaryMedia(host.roomId, host.inviteToken, guest.currentMemberId, photo.media[1]!.id);
     expect(photoConsumed.media.find((item) => item.id === photo.media[1]!.id)?.dataUrl).toBeUndefined();
+    const videoConsumed = consumeTemporaryMedia(host.roomId, host.inviteToken, guest.currentMemberId, video.media[2]!.id);
+    expect(videoConsumed.media.find((item) => item.id === video.media[2]!.id)?.dataUrl).toBeUndefined();
   });
 
   it("rejects invalid media formats", () => {

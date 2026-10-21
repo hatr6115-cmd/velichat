@@ -52,7 +52,7 @@ export const appRouter = router({
     send: publicProcedure.input(roomInput.extend({ body: z.string() })).mutation(({ input }) =>
       sendTemporaryMessage(input.roomId, input.inviteToken, input.memberId, input.body),
     ),
-    sendMedia: publicProcedure.input(roomInput.extend({ kind: z.enum(["voice", "photo"]), dataUrl: z.string() })).mutation(({ input }) =>
+    sendMedia: publicProcedure.input(roomInput.extend({ kind: z.enum(["voice", "photo", "video"]), dataUrl: z.string() })).mutation(({ input }) =>
       sendTemporaryMedia(input.roomId, input.inviteToken, input.memberId, input.kind, input.dataUrl),
     ),
     consumeMedia: publicProcedure.input(roomInput.extend({ mediaId: z.string().min(8).max(32) })).mutation(({ input }) =>
@@ -73,8 +73,9 @@ export const appRouter = router({
     startCall: publicProcedure.input(roomInput.extend({
       kind: z.enum(["audio", "video"]),
       offer: z.string().optional(),
+      targetId: z.string().optional(),
     })).mutation(({ input }) =>
-      startTemporaryCall(input.roomId, input.inviteToken, input.memberId, input.kind, input.offer),
+      startTemporaryCall(input.roomId, input.inviteToken, input.memberId, input.kind, input.offer, input.targetId),
     ),
     joinCall: publicProcedure.input(roomInput).mutation(({ input }) =>
       joinTemporaryCall(input.roomId, input.inviteToken, input.memberId),

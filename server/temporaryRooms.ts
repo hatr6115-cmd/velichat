@@ -10,6 +10,7 @@ export type CallSignal = {
 export type ActiveCall = {
   initiatorId: string;
   initiatorAlias: string;
+  targetId?: string;
   kind: 'audio' | 'video';
   startedAt: number;
   participants: string[];
@@ -23,6 +24,7 @@ export const ROOM_TTL_MS = 30 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 2_000;
 const MAX_VOICE_BYTES = 5 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 25 * 1024 * 1024;
 
 export type TemporaryAlias = string;
 
@@ -45,7 +47,7 @@ type TemporaryMedia = {
   id: string;
   memberId: string;
   alias: TemporaryAlias;
-  kind: "voice" | "photo";
+  kind: "voice" | "photo" | "video";
   dataUrl?: string; // made optional so we can delete it when everyone consumed
   sentAt: number;
   consumedBy: string[];
@@ -75,6 +77,7 @@ export type RoomSnapshot = {
   currentMemberId: string;
   currentAlias: string;
   participantCount: number;
+  typingAlias?: string;
   typingAliases: string[];
   messages: TemporaryMessage[];
   media: TemporaryMediaSnapshot[];
@@ -213,6 +216,7 @@ function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
     currentMemberId,
     currentAlias: current.alias,
     participantCount: 1 + room.guests.length,
+    typingAlias: typingAliases[0],
     typingAliases: Array.from(new Set(typingAliases)),
     messages: room.messages.map(m => ({ ...m, deliveredTo: [...m.deliveredTo], readBy: [...m.readBy] })),
     media: room.media.map((item) => ({
@@ -220,8 +224,15 @@ function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
       consumedBy: [...item.consumedBy],
       dataUrl: item.consumedBy.includes(currentMemberId) ? undefined : item.dataUrl,
     })),
-    call: room.call ? { ...room.call, participants: [...room.call.participants] } : undefined,
-    signals: (room.signals || []).filter(s => s.receiverId === currentMemberId || (s.receiverId === 'all' && s.senderId !== currentMemberId)),
+    call: room.call
+      ? (room.call.targetId && room.call.targetId !== currentMemberId && room.call.initiatorId !== currentMemberId)
+        ? undefined
+        : { ...room.call, participants: [...room.call.participants] }
+      : undefined,
+    signals: (room.signals || []).filter(s =>
+      s.receiverId === currentMemberId ||
+      (s.receiverId === 'all' && s.senderId !== currentMemberId && (room.call ? room.call.participants.includes(currentMemberId) : true))
+    ),
   };
 }
 
@@ -351,7 +362,7 @@ function getParticipant(room: Room, memberId: string) {
   return member;
 }
 
-function validateMedia(kind: "voice" | "photo", dataUrlInput: string) {
+function validateMedia(kind: "voice" | "photo" | "video", dataUrlInput: string) {
   if (typeof dataUrlInput !== "string" || !dataUrlInput.startsWith("data:")) {
     throw new Error("Unsupported media format.");
   }
@@ -386,29 +397,42 @@ function validateMedia(kind: "voice" | "photo", dataUrlInput: string) {
     "image/heic",
     "image/heif",
   ];
+  const allowedVideo = [
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+    "video/3gpp",
+    "video/x-matroska",
+    "video/ogg",
+  ];
 
   const isVoice = allowedAudio.includes(rawMime);
   const isImage = allowedImage.includes(rawMime);
+  const isVideo = allowedVideo.includes(rawMime);
 
   if (kind === "voice" && !isVoice) {
-    if (isImage) throw new Error("Media type does not match the selected action.");
+    if (isImage || isVideo) throw new Error("Media type does not match the selected action.");
     throw new Error(`Unsupported audio format: ${rawMime}`);
   }
   if (kind === "photo" && !isImage) {
-    if (isVoice) throw new Error("Media type does not match the selected action.");
+    if (isVoice || isVideo) throw new Error("Media type does not match the selected action.");
     throw new Error(`Unsupported image format: ${rawMime}`);
+  }
+  if (kind === "video" && !isVideo) {
+    if (isVoice || isImage) throw new Error("Media type does not match the selected action.");
+    throw new Error(`Unsupported video format: ${rawMime}`);
   }
 
   const bytes = Buffer.byteLength(base64Raw, "base64");
-  const maxBytes = kind === "voice" ? MAX_VOICE_BYTES : MAX_PHOTO_BYTES;
+  const maxBytes = kind === "voice" ? MAX_VOICE_BYTES : kind === "photo" ? MAX_PHOTO_BYTES : MAX_VIDEO_BYTES;
   if (bytes > maxBytes) {
-    throw new Error(`${kind === "voice" ? "Voice note" : "Photo"} is too large.`);
+    throw new Error(`${kind === "voice" ? "Voice note" : kind === "photo" ? "Photo" : "Video"} is too large.`);
   }
 
   return `data:${rawMime};base64,${base64Raw}`;
 }
 
-export function sendTemporaryMedia(roomId: string, inviteToken: string, memberId: string, kind: "voice" | "photo", dataUrlInput: string) {
+export function sendTemporaryMedia(roomId: string, inviteToken: string, memberId: string, kind: "voice" | "photo" | "video", dataUrlInput: string) {
   const room = requireRoom(roomId, inviteToken);
   const member = getParticipant(room, memberId);
   const dataUrl = validateMedia(kind, dataUrlInput);
@@ -432,7 +456,7 @@ export function consumeTemporaryMedia(roomId: string, inviteToken: string, membe
   const item = room.media.find((media) => media.id === mediaId);
   if (!item) throw new Error("This media is no longer available.");
   if (item.memberId === memberId) throw new Error("Only the recipient can consume this media.");
-  if (item.consumedBy.includes(memberId)) throw new Error("You have already consumed this media.");
+  if (item.consumedBy.includes(memberId)) throw new Error("This media is no longer available.");
   
   item.consumedBy.push(memberId);
   
@@ -468,7 +492,12 @@ export function leaveTemporaryRoom(roomId: string, inviteToken: string, memberId
     rooms.delete(roomId);
   } else {
     room.guests = room.guests.filter(g => g.id !== memberId);
-    notifyRoomSubscribers(roomId);
+    if (room.guests.length === 0) {
+      notifyRoomSubscribers(roomId, "The room was closed.");
+      rooms.delete(roomId);
+    } else {
+      notifyRoomSubscribers(roomId);
+    }
   }
   
   return { success: true as const };
@@ -490,13 +519,15 @@ export function startTemporaryCall(
   inviteToken: string,
   memberId: string,
   kind: 'audio' | 'video',
-  offer?: string
+  offer?: string,
+  targetId?: string
 ) {
   const room = requireRoom(roomId, inviteToken);
   const participant = getParticipant(room, memberId);
   room.call = {
     initiatorId: memberId,
     initiatorAlias: participant.alias,
+    targetId,
     kind,
     startedAt: Date.now(),
     participants: [memberId],
@@ -512,8 +543,15 @@ export function joinTemporaryCall(roomId: string, inviteToken: string, memberId:
   const room = requireRoom(roomId, inviteToken);
   getParticipant(room, memberId);
   if (!room.call) throw new Error("No active call in this room.");
+  if (room.call.targetId && room.call.targetId !== memberId && room.call.initiatorId !== memberId) {
+    throw new Error("This call is directed to another participant.");
+  }
   if (!room.call.participants.includes(memberId)) {
+    if (room.call.participants.length >= 2) {
+      throw new Error("Call already has two participants.");
+    }
     room.call.participants.push(memberId);
+    room.call.targetId = memberId;
   }
   const snap = snapshot(room, memberId);
   notifyRoomSubscribers(roomId);

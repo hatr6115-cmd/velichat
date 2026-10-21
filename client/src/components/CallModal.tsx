@@ -42,7 +42,7 @@ export const CallModal: React.FC<CallModalProps> = ({
   const hasRemoteVideo = Boolean(
     remoteStream &&
     remoteStream.getVideoTracks().length > 0 &&
-    remoteStream.getVideoTracks().some((t) => t.enabled && t.readyState === "live")
+    remoteStream.getVideoTracks().some((t) => t.enabled)
   );
 
   useEffect(() => {
@@ -165,10 +165,10 @@ export const CallModal: React.FC<CallModalProps> = ({
                   autoPlay
                   playsInline
                   muted
-                  className={`w-full h-full object-cover ${hasRemoteVideo ? "block" : "hidden"}`}
+                  className="w-full h-full object-cover"
                 />
                 {!hasRemoteVideo && (
-                  <div className="flex flex-col items-center gap-3 text-zinc-400">
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-zinc-950 gap-3 text-zinc-400">
                     <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center text-xl font-bold text-white shadow-lg">
                       {partnerAlias.slice(0, 2).toUpperCase()}
                     </div>
