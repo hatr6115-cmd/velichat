@@ -1,12 +1,14 @@
-﻿services:
+services:
   - type: web
     name: veilchat
     env: node
     plan: free
-    buildCommand: pnpm install && pnpm build
-    startCommand: pnpm start
+    buildCommand: npm install -g pnpm && pnpm install --frozen-lockfile && pnpm build
+    startCommand: node dist/index.js
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: 22.12.0
       - key: PORT
         value: 3000
