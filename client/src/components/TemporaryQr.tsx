@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { Copy, Download, QrCode, Share2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { toast } from "sonner";
 
 type TemporaryQrProps = {
   inviteUrl: string;
@@ -52,7 +51,6 @@ export default function TemporaryQr({ inviteUrl, onScan, onClose, inline = false
   async function copyInvite() {
     await navigator.clipboard.writeText(inviteUrl);
     setCopied(true);
-    toast.success("Invite link copied to clipboard");
     setTimeout(() => setCopied(false), 2000);
   }
 
@@ -62,7 +60,6 @@ export default function TemporaryQr({ inviteUrl, onScan, onClose, inline = false
     anchor.href = dataUrl;
     anchor.download = "veilchat-invite-qr.png";
     anchor.click();
-    toast.success("QR code downloaded");
   }
 
   return (
