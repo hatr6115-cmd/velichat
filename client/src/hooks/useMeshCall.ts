@@ -286,6 +286,35 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
           else pendingIceRef.current.set(signal.senderId, [...(pendingIceRef.current.get(signal.senderId) || []), payload]);
         }
       }
+
+      // The server also anchors the latest offer and answer on the call
+      // snapshot. Recover from a dropped SSE signal without requiring users to
+      // hang up and redial.
+      if (localRef.current && room.call) {
+        const remoteId = room.call.participants.find((id) => id !== session.memberId);
+        if (remoteId && room.call.initiatorId !== session.memberId && room.call.offer) {
+          await createPeer(remoteId, false);
+          const pc = peersRef.current.get(remoteId);
+          if (pc && !pc.remoteDescription) {
+            await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(room.call.offer)));
+            const stream = localRef.current;
+            stream.getTracks().forEach((track) => {
+              if (!pc.getSenders().some((sender) => sender.track?.id === track.id)) pc.addTrack(track, stream);
+            });
+            await flushIce(remoteId, pc);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await send(remoteId, "answer", answer);
+          }
+        }
+        if (remoteId && room.call.initiatorId === session.memberId && room.call.answer) {
+          const pc = peersRef.current.get(remoteId);
+          if (pc && !pc.remoteDescription && pc.signalingState === "have-local-offer") {
+            await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(room.call.answer)));
+            await flushIce(remoteId, pc);
+          }
+        }
+      }
     };
     void processSignals();
   }, [callKind, cleanup, createPeer, flushIce, isInCall, room, send, session]);
