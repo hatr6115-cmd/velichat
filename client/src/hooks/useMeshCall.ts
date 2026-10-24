@@ -109,6 +109,19 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     });
   }, []);
 
+  const attachLocalTracks = useCallback(async (pc: RTCPeerConnection, stream: MediaStream) => {
+    for (const track of stream.getTracks()) {
+      const existingSender = pc.getTransceivers()
+        .find((transceiver) => transceiver.receiver.track?.kind === track.kind && !transceiver.sender.track)
+        ?.sender;
+      if (existingSender) {
+        await existingSender.replaceTrack(track);
+      } else if (!pc.getSenders().some((sender) => sender.track?.id === track.id)) {
+        pc.addTrack(track, stream);
+      }
+    }
+  }, []);
+
   const createPeer = useCallback(async (remoteId: string, offerer: boolean) => {
     if (!session || !localRef.current || peersRef.current.has(remoteId) || creatingRef.current.has(remoteId)) return;
     creatingRef.current.add(remoteId);
@@ -119,7 +132,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     // matched correctly; adding tracks too early can leave the answer without
     // usable media sections and both clients stuck on "Connecting stream…".
     if (offerer) {
-      localRef.current.getTracks().forEach((track) => pc.addTrack(track, localRef.current!));
+      await attachLocalTracks(pc, localRef.current);
     }
 
     pc.ontrack = (event) => {
@@ -160,7 +173,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     } finally {
       creatingRef.current.delete(remoteId);
     }
-  }, [closePeer, send, session]);
+  }, [attachLocalTracks, closePeer, send, session]);
 
   const flushIce = useCallback(async (memberId: string, pc: RTCPeerConnection) => {
     const queued = pendingIceRef.current.get(memberId) || [];
@@ -263,13 +276,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
           if (!pc || pc.remoteDescription) continue;
           await pc.setRemoteDescription(new RTCSessionDescription(payload));
           const stream = localRef.current;
-          if (stream) {
-            stream.getTracks().forEach((track) => {
-              if (!pc.getSenders().some((sender) => sender.track?.id === track.id)) {
-                pc.addTrack(track, stream);
-              }
-            });
-          }
+          if (stream) await attachLocalTracks(pc, stream);
           await flushIce(signal.senderId, pc);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
@@ -298,9 +305,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
           if (pc && !pc.remoteDescription) {
             await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(room.call.offer)));
             const stream = localRef.current;
-            stream.getTracks().forEach((track) => {
-              if (!pc.getSenders().some((sender) => sender.track?.id === track.id)) pc.addTrack(track, stream);
-            });
+            await attachLocalTracks(pc, stream);
             await flushIce(remoteId, pc);
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
@@ -317,7 +322,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       }
     };
     void processSignals();
-  }, [callKind, cleanup, createPeer, flushIce, isInCall, room, send, session]);
+  }, [attachLocalTracks, callKind, cleanup, createPeer, flushIce, isInCall, room, send, session]);
 
   return {
     isInCall,
