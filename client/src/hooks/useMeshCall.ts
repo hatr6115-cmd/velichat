@@ -114,7 +114,13 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     creatingRef.current.add(remoteId);
     const pc = new RTCPeerConnection(rtcConfig);
     peersRef.current.set(remoteId, pc);
-    localRef.current.getTracks().forEach((track) => pc.addTrack(track, localRef.current!));
+    // The offerer adds tracks before creating its offer. The answerer must
+    // wait until setRemoteDescription(offer) so the remote transceivers are
+    // matched correctly; adding tracks too early can leave the answer without
+    // usable media sections and both clients stuck on "Connecting stream…".
+    if (offerer) {
+      localRef.current.getTracks().forEach((track) => pc.addTrack(track, localRef.current!));
+    }
 
     pc.ontrack = (event) => {
       const stream = event.streams[0] || new MediaStream([event.track]);
@@ -130,6 +136,15 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     };
     pc.onicecandidate = (event) => {
       if (event.candidate) void send(remoteId, "ice", event.candidate.toJSON());
+    };
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        setCallStatus("connected");
+      }
+      if (pc.iceConnectionState === "failed") {
+        setCallError("The call could not establish a network connection. Please try again.");
+        closePeer(remoteId);
+      }
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "connected") setCallStatus("connected");
@@ -213,7 +228,11 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       }
       if (isInCall && localRef.current) {
         for (const remoteId of room.call.participants.filter((id) => id !== session.memberId)) {
-          void createPeer(remoteId, session.memberId < remoteId);
+          // Only the deterministic lower member id starts negotiation. The
+          // other side creates its peer only after receiving that offer.
+          // Creating idle peers on both sides first can produce offer glare and
+          // leave both calls stuck at "Connecting stream…".
+          if (session.memberId < remoteId) void createPeer(remoteId, true);
         }
       }
     } else if (isInCall && !missingCallTimerRef.current) {
@@ -243,6 +262,14 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
           const pc = peersRef.current.get(signal.senderId);
           if (!pc || pc.remoteDescription) continue;
           await pc.setRemoteDescription(new RTCSessionDescription(payload));
+          const stream = localRef.current;
+          if (stream) {
+            stream.getTracks().forEach((track) => {
+              if (!pc.getSenders().some((sender) => sender.track?.id === track.id)) {
+                pc.addTrack(track, stream);
+              }
+            });
+          }
           await flushIce(signal.senderId, pc);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
