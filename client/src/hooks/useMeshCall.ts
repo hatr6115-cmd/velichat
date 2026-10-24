@@ -166,7 +166,10 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
 
     try {
       if (offerer) {
-        const offer = await pc.createOffer();
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true,
+        });
         await pc.setLocalDescription(offer);
         await send(remoteId, "offer", offer);
       }
@@ -241,11 +244,10 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       }
       if (isInCall && localRef.current) {
         for (const remoteId of room.call.participants.filter((id) => id !== session.memberId)) {
-          // Only the deterministic lower member id starts negotiation. The
-          // other side creates its peer only after receiving that offer.
-          // Creating idle peers on both sides first can produce offer glare and
-          // leave both calls stuck at "Connecting stream…".
-          if (session.memberId < remoteId) void createPeer(remoteId, true);
+          // The actual caller owns offer creation. The receiver creates its
+          // peer only after receiving that offer, which prevents offer glare
+          // and ensures the caller's audio/video tracks are in the offer.
+          if (room.call.initiatorId === session.memberId) void createPeer(remoteId, true);
         }
       }
     } else if (isInCall && !missingCallTimerRef.current) {
