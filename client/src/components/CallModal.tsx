@@ -9,6 +9,7 @@ interface CallModalProps {
   isInitiator: boolean;
   localStream: MediaStream | null;
   remoteStreams: RemoteStream[];
+  callError?: string | null;
   callStatus: "calling" | "ringing" | "connected" | "ended";
   onAccept?: () => void;
   onReject?: () => void;
@@ -45,7 +46,7 @@ function RemoteTile({ item, kind }: { item: RemoteStream; kind: "audio" | "video
 }
 
 export const CallModal: React.FC<CallModalProps> = ({
-  kind, partnerAlias = "Participant", isInitiator, localStream, remoteStreams, callStatus,
+  kind, partnerAlias = "Participant", isInitiator, localStream, remoteStreams, callError, callStatus,
   onAccept, onReject, onHangup, onToggleMic, onToggleCam, isMicMuted, isCamOff,
 }) => {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -70,7 +71,10 @@ export const CallModal: React.FC<CallModalProps> = ({
         </div>
         <div className={`relative grid flex-1 gap-2 bg-zinc-950 p-2 ${remoteStreams.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
           {remoteStreams.length ? remoteStreams.map((item) => <RemoteTile key={item.memberId} item={item} kind={kind} />) : (
-            <div className="flex items-center justify-center text-sm text-zinc-400">{callStatus === "ringing" ? `${partnerAlias} is calling` : "Connecting stream…"}</div>
+            <div className="flex flex-col items-center justify-center gap-2 px-6 text-center text-sm text-zinc-400">
+              <span>{callStatus === "ringing" ? `${partnerAlias} is calling` : "Connecting stream…"}</span>
+              {callError && <span className="max-w-sm rounded-xl border border-red-400/30 bg-red-950/40 px-3 py-2 text-xs text-red-200">{callError}</span>}
+            </div>
           )}
           {kind === "video" && localStream && !isCamOff && (
             <video ref={localVideoRef} autoPlay playsInline muted className="absolute right-4 top-4 z-10 h-32 w-24 rounded-xl border border-white/30 object-cover sm:h-44 sm:w-32" />

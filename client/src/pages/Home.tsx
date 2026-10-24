@@ -8,6 +8,7 @@ import {
   Clock3,
   Copy,
   Dice5,
+  Download,
   Eye,
   Flame,
   Image as ImageIcon,
@@ -48,6 +49,11 @@ import {
 } from "@shared/temporaryInvite";
 
 const aliasPattern = /^[A-Za-z0-9 ._-]{2,32}$/;
+
+const ANDROID_DOWNLOAD_URL = import.meta.env.VITE_ANDROID_DOWNLOAD_URL ||
+  "https://github.com/hatr6115-cmd/velichat/releases/latest/download/app-debug.apk";
+const IOS_DOWNLOAD_URL = import.meta.env.VITE_IOS_DOWNLOAD_URL ||
+  "https://github.com/hatr6115-cmd/velichat/releases/latest";
 
 const RANDOM_ALIASES = [
   "Alex",
@@ -174,7 +180,7 @@ export default function Home() {
   const room = sseData || roomQuery.data;
 
   const {
-    isInCall, isInitiator, callKind, callStatus, localStream, remoteStreams,
+    isInCall, isInitiator, callKind, callStatus, localStream, remoteStreams, callError,
     isMicMuted, isCamOff, start: startCall, accept: acceptCall, reject: rejectCall,
     hangup: hangupCall, toggleMic, toggleCam,
   } = useMeshCall(session ? { roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId } : null, room);
@@ -193,6 +199,10 @@ export default function Home() {
       setSession(null);
     }
   }, [roomQuery.error, isSseConnected]);
+
+  useEffect(() => {
+    if (callError) toast.error(callError);
+  }, [callError]);
 
   // Auto-scroll message feed
   useEffect(() => {
@@ -1226,6 +1236,7 @@ export default function Home() {
             isInitiator={isInitiator || room?.call?.initiatorId === session.memberId}
             localStream={localStream}
             remoteStreams={remoteStreams}
+            callError={callError}
             callStatus={callStatus}
             onAccept={acceptCall}
             onReject={rejectCall}
@@ -1403,6 +1414,30 @@ export default function Home() {
             <span>Zero Server Storage</span>
             <span>•</span>
             <span>Auto-Expires</span>
+          </div>
+
+          <div className="border-t border-zinc-100 pt-5 dark:border-zinc-800">
+            <p className="mb-3 text-center text-xs font-semibold text-zinc-700 dark:text-zinc-300">Get VeilChat on your phone</p>
+            <div className="grid grid-cols-2 gap-2">
+              <a
+                href={ANDROID_DOWNLOAD_URL}
+                download
+                className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-xs font-semibold text-zinc-800 transition-colors hover:border-blue-400 hover:bg-blue-50 dark:border-zinc-700 dark:bg-zinc-800/70 dark:text-zinc-100 dark:hover:border-blue-500 dark:hover:bg-blue-950/30"
+              >
+                <Download className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Android APK</span>
+              </a>
+              <a
+                href={IOS_DOWNLOAD_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-xs font-semibold text-zinc-800 transition-colors hover:border-blue-400 hover:bg-blue-50 dark:border-zinc-700 dark:bg-zinc-800/70 dark:text-zinc-100 dark:hover:border-blue-500 dark:hover:bg-blue-950/30"
+              >
+                <Download className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                <span>iOS app</span>
+              </a>
+            </div>
+            <p className="mt-2 text-center text-[10px] text-zinc-500 dark:text-zinc-400">Android downloads the APK. iOS opens the published App Store/TestFlight link.</p>
           </div>
         </div>
       </main>

@@ -40,6 +40,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const [remoteStreams, setRemoteStreams] = useState<RemoteEntry[]>([]);
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isCamOff, setIsCamOff] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
 
   const localRef = useRef<MediaStream | null>(null);
   const peersRef = useRef(new Map<string, RTCPeerConnection>());
@@ -96,6 +97,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     setIsInitiator(false);
     setIsMicMuted(false);
     setIsCamOff(false);
+    setCallError(null);
     setCallStatus("ended");
   }, [closePeer]);
 
@@ -154,6 +156,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const accept = useCallback(async () => {
     if (!session || !room?.call || acceptedRef.current) return;
     acceptedRef.current = true;
+    setCallError(null);
     const kind = room.call.kind;
     setCallKind(kind);
     setCallStatus("calling");
@@ -163,14 +166,17 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       setLocalStream(stream);
       await joinCall.mutateAsync({ roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId });
       setIsInCall(true);
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to access your microphone or camera.";
       cleanup();
+      setCallError(message);
     }
   }, [cleanup, getMedia, joinCall, room, session]);
 
   const start = useCallback(async (kind: CallKind) => {
     if (!session || !room || room.participantCount < 2 || isInCall) return;
     cleanup();
+    setCallError(null);
     try {
       const stream = await getMedia(kind);
       localRef.current = stream;
@@ -180,8 +186,10 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       setIsInCall(true);
       setCallStatus("calling");
       await startCall.mutateAsync({ roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId, kind });
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to start the call. Check microphone and camera permissions.";
       cleanup();
+      setCallError(message);
     }
   }, [cleanup, getMedia, isInCall, room, session, startCall]);
 
@@ -219,13 +227,17 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       for (const signal of room.signals || []) {
         if (processedSignalsRef.current.has(signal.id) || signal.senderId === session.memberId) continue;
         if (signal.receiverId !== "all" && signal.receiverId !== session.memberId) continue;
-        processedSignalsRef.current.add(signal.id);
         const payload = JSON.parse(signal.payload);
         if (signal.type === "end") {
+          processedSignalsRef.current.add(signal.id);
           cleanup();
           continue;
         }
+        // The initiator can send an offer while the callee is still deciding
+        // whether to grant microphone/camera access. Keep the signal queued by
+        // leaving it unprocessed until local media exists.
         if (!localRef.current) continue;
+        processedSignalsRef.current.add(signal.id);
         if (signal.type === "offer") {
           await createPeer(signal.senderId, false);
           const pc = peersRef.current.get(signal.senderId);
@@ -258,6 +270,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     callStatus,
     localStream,
     remoteStreams,
+    callError,
     isMicMuted,
     isCamOff,
     start,
