@@ -738,7 +738,7 @@ export default function Home() {
     return (
       <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-full max-w-3xl mx-auto bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden transition-colors">
         {/* Header */}
-        <header className="flex items-center justify-between px-2.5 sm:px-4 py-2.5 sm:py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-20 shrink-0 shadow-xs">
+        <header className="flex items-center justify-between gap-2 px-2.5 sm:px-4 py-2.5 sm:py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-20 shrink-0 shadow-xs">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <div className="relative shrink-0">
               <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-xs sm:text-sm shadow-sm">
@@ -762,7 +762,7 @@ export default function Home() {
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0 max-w-[70%] overflow-x-auto">
             {/* Expiry Counter & +Time Button */}
             <div
               className={`flex items-center rounded-lg border px-1.5 py-1 text-[11px] sm:text-xs font-medium gap-1 shrink-0 transition-colors ${
@@ -841,6 +841,7 @@ export default function Home() {
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             >
               {theme === "dark" ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-zinc-700" />}
+              <span className="hidden min-[360px]:inline text-[10px] font-medium">{theme === "dark" ? "Light" : "Dark"}</span>
             </button>
 
             {/* Exit Room */}
@@ -1302,7 +1303,7 @@ export default function Home() {
               <div className="space-y-1">
                 <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Leave Conversation?</h3>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                  This room is temporary. All messages and media will be erased from memory immediately.
+                  Leave this conversation?
                 </p>
               </div>
 
@@ -1352,6 +1353,7 @@ export default function Home() {
             aria-label="Toggle theme"
           >
             {theme === "dark" ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-zinc-700" />}
+            <span className="text-[11px] font-medium">{theme === "dark" ? "Light" : "Dark"}</span>
           </button>
 
           <button
@@ -1422,9 +1424,8 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="pt-3 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
-            <span className="flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Private room</span>
-            <a href={ANDROID_DOWNLOAD_URL} download className="text-blue-600 dark:text-blue-400 hover:underline">Android APK</a>
+          <div className="pt-3 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-500 dark:text-zinc-400">
+            <a href={ANDROID_DOWNLOAD_URL} download className="text-blue-600 dark:text-blue-400 hover:underline">Download Android app</a>
           </div>
         </div>
       </main>

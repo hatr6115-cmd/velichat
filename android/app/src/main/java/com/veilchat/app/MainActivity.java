@@ -98,6 +98,8 @@ public class MainActivity extends AppCompatActivity {
         if (getIntent() != null && getIntent().getData() != null) {
             targetUrl = getIntent().getData().toString();
         }
+        // Always fetch the latest hosted UI after an app update instead of showing stale WebView HTML.
+        webView.clearCache(false);
         webView.loadUrl(targetUrl);
     }
 
