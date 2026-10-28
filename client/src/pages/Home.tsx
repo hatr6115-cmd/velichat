@@ -52,9 +52,6 @@ const aliasPattern = /^[A-Za-z0-9 ._-]{2,32}$/;
 
 const ANDROID_DOWNLOAD_URL = import.meta.env.VITE_ANDROID_DOWNLOAD_URL ||
   "https://github.com/hatr6115-cmd/velichat/releases/latest/download/app-debug.apk";
-const IOS_DOWNLOAD_URL = import.meta.env.VITE_IOS_DOWNLOAD_URL ||
-  "https://github.com/hatr6115-cmd/velichat/releases/latest";
-
 const RANDOM_ALIASES = [
   "Alex",
   "Sam",
@@ -86,6 +83,14 @@ function formatRemaining(expiresAt: number, now: number) {
 function validateAlias(alias: string) {
   const normalized = alias.trim();
   return aliasPattern.test(normalized) ? normalized : null;
+}
+
+function pingServer() {
+  void fetch("/api/health", {
+    method: "GET",
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  }).catch(() => undefined);
 }
 
 export default function Home() {
@@ -184,6 +189,17 @@ export default function Home() {
     isMicMuted, isCamOff, start: startCall, accept: acceptCall, reject: rejectCall,
     hangup: hangupCall, toggleMic, toggleCam,
   } = useMeshCall(session ? { roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId } : null, room);
+
+  // Wake a sleeping Render instance when the app opens, then keep it warm while open.
+  useEffect(() => {
+    const firstPing = window.setTimeout(pingServer, 2_000);
+    const keepAlive = window.setInterval(pingServer, 5 * 60 * 1_000);
+    pingServer();
+    return () => {
+      window.clearTimeout(firstPing);
+      window.clearInterval(keepAlive);
+    };
+  }, []);
 
 
   // Sync active clock
@@ -1314,12 +1330,12 @@ export default function Home() {
   const isJoin = Boolean(invite);
 
   return (
-    <div className="min-h-[100dvh] bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex flex-col justify-between p-4 sm:p-6 transition-colors selection:bg-blue-600 selection:text-white">
+    <div className="min-h-[100dvh] bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex flex-col p-4 sm:p-6 transition-colors selection:bg-blue-600 selection:text-white">
       {/* Header */}
-      <header className="flex items-center justify-between max-w-2xl w-full mx-auto py-3">
+      <header className="flex items-center justify-between max-w-2xl w-full mx-auto py-2">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md">
-            <MessageSquare className="w-4 h-4" />
+          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white">
+            <Lock className="w-4 h-4" />
           </div>
           <span className="font-bold text-base tracking-tight text-zinc-900 dark:text-zinc-100">
             VeilChat
@@ -1331,7 +1347,7 @@ export default function Home() {
           <button
             type="button"
             onClick={toggleTheme}
-            className="p-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 shadow-sm transition-colors"
+            className="p-2 rounded-lg text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
             title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             aria-label="Toggle theme"
           >
@@ -1340,7 +1356,7 @@ export default function Home() {
 
           <button
             onClick={() => setIsScannerOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs font-medium text-zinc-700 dark:text-zinc-300 shadow-sm transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
           >
             <Camera className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
             <span>Scan QR</span>
@@ -1349,13 +1365,13 @@ export default function Home() {
       </header>
 
       {/* Main Card */}
-      <main className="max-w-md w-full mx-auto my-auto py-6">
-        <div className="p-6 sm:p-8 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-xl space-y-6">
-          <div className="text-center space-y-1.5">
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+      <main className="max-w-sm w-full mx-auto my-auto py-8">
+        <div className="p-5 sm:p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm space-y-5">
+          <div className="space-y-1">
+            <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
               {isJoin ? "Join Private Chat" : "Start Private Chat"}
             </h1>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
               {isJoin
                 ? `You were invited to chat with ${invite?.hostAlias || "a friend"}.`
                 : "Temporary, private room. Disappears when you leave."}
@@ -1364,7 +1380,7 @@ export default function Home() {
 
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <div className="flex justify-between items-center text-xs">
+              <div className="flex justify-between items-center text-sm">
                 <label htmlFor="alias-input" className="font-medium text-zinc-700 dark:text-zinc-300">
                   Your Nickname
                 </label>
@@ -1373,7 +1389,7 @@ export default function Home() {
                   onClick={generateRandomAlias}
                   className="flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline font-medium"
                 >
-                  <Dice5 className="w-3.5 h-3.5" /> Random
+                    <Dice5 className="w-3.5 h-3.5" /> Randomize
                 </button>
               </div>
 
@@ -1387,7 +1403,7 @@ export default function Home() {
                 placeholder="Enter a display name..."
                 maxLength={32}
                 autoComplete="off"
-                className="w-full bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                className="w-full bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3.5 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
               />
             </div>
 
@@ -1400,52 +1416,18 @@ export default function Home() {
             <button
               onClick={() => void (isJoin ? join() : create())}
               disabled={createRoom.isPending || joinRoom.isPending || !alias.trim()}
-              className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold shadow-md transition-all flex items-center justify-center gap-2"
+              className="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2"
             >
               {isJoin ? "Join Conversation" : "Create New Room"}
             </button>
           </div>
 
-          <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-center gap-4 text-[11px] text-zinc-600 dark:text-zinc-400 font-medium">
-            <span className="flex items-center gap-1">
-              <Lock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Private P2P
-            </span>
-            <span>•</span>
-            <span>Zero Server Storage</span>
-            <span>•</span>
-            <span>Auto-Expires</span>
-          </div>
-
-          <div className="border-t border-zinc-100 pt-5 dark:border-zinc-800">
-            <p className="mb-3 text-center text-xs font-semibold text-zinc-700 dark:text-zinc-300">Get VeilChat on your phone</p>
-            <div className="grid grid-cols-2 gap-2">
-              <a
-                href={ANDROID_DOWNLOAD_URL}
-                download
-                className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-xs font-semibold text-zinc-800 transition-colors hover:border-blue-400 hover:bg-blue-50 dark:border-zinc-700 dark:bg-zinc-800/70 dark:text-zinc-100 dark:hover:border-blue-500 dark:hover:bg-blue-950/30"
-              >
-                <Download className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                <span>Android APK</span>
-              </a>
-              <a
-                href={IOS_DOWNLOAD_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-xs font-semibold text-zinc-800 transition-colors hover:border-blue-400 hover:bg-blue-50 dark:border-zinc-700 dark:bg-zinc-800/70 dark:text-zinc-100 dark:hover:border-blue-500 dark:hover:bg-blue-950/30"
-              >
-                <Download className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                <span>iOS app</span>
-              </a>
-            </div>
-            <p className="mt-2 text-center text-[10px] text-zinc-500 dark:text-zinc-400">Android downloads the APK. iOS opens the published App Store/TestFlight link.</p>
+          <div className="pt-3 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Private room</span>
+            <a href={ANDROID_DOWNLOAD_URL} download className="text-blue-600 dark:text-blue-400 hover:underline">Android APK</a>
           </div>
         </div>
       </main>
-
-      {/* Footer */}
-      <footer className="text-center text-xs text-zinc-600 dark:text-zinc-400 py-3">
-        VeilChat • Ephemeral, encrypted peer-to-peer conversations
-      </footer>
 
       <QrScannerModal
         isOpen={isScannerOpen}
