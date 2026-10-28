@@ -161,7 +161,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
 
-            // File selection for view-once photos
+            // File selection for view-once photos and videos
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback,
                                              FileChooserParams fileChooserParams) {
@@ -169,7 +169,7 @@ public class MainActivity extends AppCompatActivity {
                     MainActivity.this.filePathCallback.onReceiveValue(null);
                 }
                 MainActivity.this.filePathCallback = filePathCallback;
-                filePickerLauncher.launch("image/*");
+                filePickerLauncher.launch("*/*");
                 return true;
             }
         });
