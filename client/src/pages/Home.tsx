@@ -65,6 +65,12 @@ const RANDOM_ALIASES = [
   "Robin",
 ];
 
+declare global {
+  interface Window {
+    VeilChatClipboard?: { copyText: (text: string) => void };
+  }
+}
+
 type Session = {
   roomId: string;
   inviteToken: string;
@@ -186,17 +192,22 @@ export default function Home() {
   const room = sseData || roomQuery.data;
 
   const copyMessage = async (messageId: string, body: string) => {
-    try {
-      await navigator.clipboard.writeText(body);
-    } catch {
-      const textarea = document.createElement("textarea");
-      textarea.value = body;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
+    if (window.VeilChatClipboard) {
+      window.VeilChatClipboard.copyText(body);
+    } else {
+      try {
+        await navigator.clipboard.writeText(body);
+      } catch {
+        const textarea = document.createElement("textarea");
+        textarea.value = body;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
     }
     setCopiedMessageId(messageId);
     window.setTimeout(() => setCopiedMessageId(current => current === messageId ? null : current), 1400);

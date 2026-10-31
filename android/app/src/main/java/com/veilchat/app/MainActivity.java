@@ -123,6 +123,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setLoadWithOverviewMode(true);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setUserAgentString(settings.getUserAgentString() + " VeilChatApp/1.0 (SecureMobile)");
+        webView.addJavascriptInterface(new ClipboardBridge(this), "VeilChatClipboard");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
