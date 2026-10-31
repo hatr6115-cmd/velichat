@@ -114,6 +114,7 @@ export default function Home() {
   const [alias, setAlias] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [message, setMessage] = useState("");
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState(inviteState.error);
 
@@ -183,6 +184,23 @@ export default function Home() {
   );
 
   const room = sseData || roomQuery.data;
+
+  const copyMessage = async (messageId: string, body: string) => {
+    try {
+      await navigator.clipboard.writeText(body);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = body;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    setCopiedMessageId(messageId);
+    window.setTimeout(() => setCopiedMessageId(current => current === messageId ? null : current), 1400);
+  };
 
   const {
     isInCall, isInitiator, callKind, callStatus, localStream, remoteStreams, callError,
@@ -939,6 +957,17 @@ export default function Home() {
                               <Check className="w-3.5 h-3.5 opacity-60 inline" />
                             )}
                           </span>
+                        )}
+                        {!isOwn && (
+                          <button
+                            type="button"
+                            onClick={() => void copyMessage(item.id, item.body)}
+                            className="ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                            aria-label="Copy message"
+                          >
+                            <Copy className="h-3 w-3" />
+                            <span>{copiedMessageId === item.id ? "Copied" : "Copy"}</span>
+                          </button>
                         )}
                       </div>
                     </div>
