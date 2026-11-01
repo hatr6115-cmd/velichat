@@ -14,13 +14,14 @@ const rtcConfig: RTCConfiguration = {
     { urls: "stun:stun.cloudflare.com:3478" },
     {
       urls: [
-        "turn:openrelay.metered.ca:80",
-        "turn:openrelay.metered.ca:80?transport=tcp",
-        "turn:openrelay.metered.ca:443",
-        "turn:openrelay.metered.ca:443?transport=tcp",
+        "turn:staticauth.openrelay.metered.ca:80",
+        "turn:staticauth.openrelay.metered.ca:80?transport=tcp",
+        "turn:staticauth.openrelay.metered.ca:443",
+        "turn:staticauth.openrelay.metered.ca:443?transport=tcp",
+        "turns:staticauth.openrelay.metered.ca:443?transport=tcp",
       ],
-      username: "openrelay",
-      credential: "openrelay",
+      username: "openrelayproject",
+      credential: "openrelayprojectsecret",
     },
   ],
   iceCandidatePoolSize: 10,
@@ -149,6 +150,12 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     };
     pc.onicecandidate = (event) => {
       if (event.candidate) void send(remoteId, "ice", event.candidate.toJSON());
+    };
+    pc.onicecandidateerror = () => {
+      // Keep trying direct/STUN candidates, but surface the failure if no path succeeds.
+      if (pc.iceConnectionState === "failed") {
+        setCallError("The network blocked the call. Please switch network or try again.");
+      }
     };
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
