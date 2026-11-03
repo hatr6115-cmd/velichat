@@ -25,6 +25,7 @@ const MAX_MESSAGE_LENGTH = 2_000;
 const MAX_VOICE_BYTES = 5 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 25 * 1024 * 1024;
+const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 
 export type TemporaryAlias = string;
 
@@ -47,7 +48,9 @@ type TemporaryMedia = {
   id: string;
   memberId: string;
   alias: TemporaryAlias;
-  kind: "voice" | "photo" | "video";
+  kind: "voice" | "photo" | "video" | "document";
+  fileName?: string;
+  mimeType?: string;
   dataUrl?: string; // made optional so we can delete it when everyone consumed
   sentAt: number;
   consumedBy: string[];
@@ -362,7 +365,7 @@ function getParticipant(room: Room, memberId: string) {
   return member;
 }
 
-function validateMedia(kind: "voice" | "photo" | "video", dataUrlInput: string) {
+function validateMedia(kind: "voice" | "photo" | "video" | "document", dataUrlInput: string) {
   if (typeof dataUrlInput !== "string" || !dataUrlInput.startsWith("data:")) {
     throw new Error("Unsupported media format.");
   }
@@ -409,6 +412,7 @@ function validateMedia(kind: "voice" | "photo" | "video", dataUrlInput: string) 
   const isVoice = allowedAudio.includes(rawMime);
   const isImage = allowedImage.includes(rawMime);
   const isVideo = allowedVideo.includes(rawMime);
+  const isDocument = rawMime.startsWith("application/") || rawMime.startsWith("text/");
 
   if (kind === "voice" && !isVoice) {
     if (isImage || isVideo) throw new Error("Media type does not match the selected action.");
@@ -422,26 +426,31 @@ function validateMedia(kind: "voice" | "photo" | "video", dataUrlInput: string) 
     if (isVoice || isImage) throw new Error("Media type does not match the selected action.");
     throw new Error(`Unsupported video format: ${rawMime}`);
   }
+  if (kind === "document" && (!isDocument || isImage || isVideo || isVoice)) {
+    throw new Error(`Unsupported document format: ${rawMime}`);
+  }
 
   const bytes = Buffer.byteLength(base64Raw, "base64");
-  const maxBytes = kind === "voice" ? MAX_VOICE_BYTES : kind === "photo" ? MAX_PHOTO_BYTES : MAX_VIDEO_BYTES;
+  const maxBytes = kind === "voice" ? MAX_VOICE_BYTES : kind === "photo" ? MAX_PHOTO_BYTES : kind === "video" ? MAX_VIDEO_BYTES : MAX_DOCUMENT_BYTES;
   if (bytes > maxBytes) {
-    throw new Error(`${kind === "voice" ? "Voice note" : kind === "photo" ? "Photo" : "Video"} is too large.`);
+    throw new Error(`${kind === "voice" ? "Voice note" : kind === "photo" ? "Photo" : kind === "video" ? "Video" : "Document"} is too large.`);
   }
 
   return `data:${rawMime};base64,${base64Raw}`;
 }
 
-export function sendTemporaryMedia(roomId: string, inviteToken: string, memberId: string, kind: "voice" | "photo" | "video", dataUrlInput: string) {
+export function sendTemporaryMedia(roomId: string, inviteToken: string, memberId: string, kind: "voice" | "photo" | "video" | "document", dataUrlInput: string, fileName?: string, mimeType?: string) {
   const room = requireRoom(roomId, inviteToken);
   const member = getParticipant(room, memberId);
   const dataUrl = validateMedia(kind, dataUrlInput);
-  room.media.push({ 
-    id: nanoid(12), 
-    memberId, 
-    alias: member.alias, 
-    kind, 
-    dataUrl, 
+  const safeFileName = fileName?.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim().slice(0, 180) || "document";
+  room.media.push({
+    id: nanoid(12),
+    memberId,
+    alias: member.alias,
+    kind,
+    ...(kind === "document" ? { fileName: safeFileName, mimeType: mimeType || dataUrl.slice(5, dataUrl.indexOf(";")) } : {}),
+    dataUrl,
     sentAt: Date.now(),
     consumedBy: []
   });
@@ -455,6 +464,7 @@ export function consumeTemporaryMedia(roomId: string, inviteToken: string, membe
   getParticipant(room, memberId);
   const item = room.media.find((media) => media.id === mediaId);
   if (!item) throw new Error("This media is no longer available.");
+  if (item.kind === "document") throw new Error("Documents remain available until the room expires.");
   if (item.memberId === memberId) throw new Error("Only the recipient can consume this media.");
   if (item.consumedBy.includes(memberId)) throw new Error("This media is no longer available.");
   
@@ -623,4 +633,3 @@ export function extendRoomExpiry(roomId: string, inviteToken: string, memberId: 
   notifyRoomSubscribers(roomId);
   return snap;
 }
-

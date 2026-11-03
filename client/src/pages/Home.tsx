@@ -10,6 +10,7 @@ import {
   Dice5,
   Download,
   Eye,
+  FileText,
   Flame,
   Image as ImageIcon,
   Lock,
@@ -134,6 +135,7 @@ export default function Home() {
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [selectedPhoto, setSelectedPhoto] = useState<{ file: File; dataUrl: string } | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<{ file: File; dataUrl: string } | null>(null);
+  const [selectedDocument, setSelectedDocument] = useState<{ file: File; dataUrl: string } | null>(null);
   const [activePhoto, setActivePhoto] = useState<string | null>(null);
   const [activeVideo, setActiveVideo] = useState<string | null>(null);
   const [photoCountdown, setPhotoCountdown] = useState(10);
@@ -563,6 +565,23 @@ export default function Home() {
       }
     }
 
+    if (selectedDocument) {
+      try {
+        await sendMedia.mutateAsync({
+          roomId: session.roomId,
+          inviteToken: session.inviteToken,
+          memberId: session.memberId,
+          kind: "document",
+          dataUrl: selectedDocument.dataUrl,
+          fileName: selectedDocument.file.name,
+          mimeType: selectedDocument.file.type || "application/octet-stream",
+        });
+        setSelectedDocument(null);
+      } catch (cause: any) {
+        console.warn("Error sending document:", cause);
+      }
+    }
+
     if (message.trim()) {
       if (typingTimerRef.current) window.clearTimeout(typingTimerRef.current);
       try {
@@ -675,6 +694,19 @@ export default function Home() {
       if (typeof reader.result === "string") {
         setSelectedVideo({ file, dataUrl: reader.result });
       }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handleDocumentFileSelected(file: File | undefined) {
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+      alert("Document must be under 20MB");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setSelectedDocument({ file, dataUrl: reader.result });
     };
     reader.readAsDataURL(file);
   }
@@ -989,9 +1021,11 @@ export default function Home() {
               {room?.media?.map((item) => {
                 const isOwn = item.memberId === session.memberId;
                 const isConsumed =
-                  consumedMediaIds.has(item.id) ||
-                  (item.consumedBy && item.consumedBy.includes(session.memberId)) ||
-                  !item.dataUrl;
+                  item.kind !== "document" && (
+                    consumedMediaIds.has(item.id) ||
+                    (item.consumedBy && item.consumedBy.includes(session.memberId)) ||
+                    !item.dataUrl
+                  );
 
                 return (
                   <div key={item.id} className={`flex flex-col ${isOwn ? "items-end" : "items-start"}`}>
@@ -1008,7 +1042,22 @@ export default function Home() {
                           : "bg-white dark:bg-zinc-900 border-zinc-200/80 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-xs"
                       }`}
                     >
-                      {item.kind === "voice" ? (
+                      {item.kind === "document" ? (
+                        <a
+                          href={item.dataUrl}
+                          download={item.fileName || "document"}
+                          className="flex min-w-[220px] max-w-[min(80vw,360px)] items-center gap-3 rounded-xl px-2 py-1 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        >
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-950/60 dark:text-blue-300">
+                            <FileText className="h-5 w-5" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-semibold">{item.fileName || "Document"}</span>
+                            <span className="mt-0.5 block text-[10px] text-zinc-500 dark:text-zinc-400">Download document</span>
+                          </span>
+                          <Download className="h-4 w-4 shrink-0 text-zinc-400" />
+                        </a>
+                      ) : item.kind === "voice" ? (
                         isConsumed ? (
                           <div className="flex items-center gap-2 text-xs text-zinc-400 italic py-1 px-2">
                             <Volume2 className="w-4 h-4 opacity-50" />
@@ -1116,6 +1165,19 @@ export default function Home() {
           </div>
         )}
 
+        {selectedDocument && (
+          <div className="flex items-center justify-between border-t border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900 dark:border-blue-900/50 dark:bg-blue-950/40 dark:text-blue-200 sm:px-4">
+            <span className="flex min-w-0 items-center gap-1.5 font-medium">
+              <FileText className="h-4 w-4 shrink-0" />
+              <span className="truncate">{selectedDocument.file.name}</span>
+              <span className="shrink-0 text-[10px] opacity-70">(document)</span>
+            </span>
+            <button type="button" onClick={() => setSelectedDocument(null)} className="ml-2 shrink-0 rounded-full p-1 font-bold text-red-500 hover:text-red-600" aria-label="Remove document">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         {/* Input Bar */}
         <footer className="p-2.5 sm:p-3 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 shrink-0 pb-[calc(0.6rem+env(safe-area-inset-bottom))]">
           {isRecording ? (
@@ -1183,6 +1245,27 @@ export default function Home() {
                 title="Send view-once video"
               >
                 <Video className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+
+              <input
+                id="document-upload-input"
+                type="file"
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.json,.md,application/*,text/*"
+                className="hidden"
+                onChange={(e) => {
+                  handleDocumentFileSelected(e.currentTarget.files?.[0]);
+                  e.currentTarget.value = "";
+                }}
+              />
+
+              <button
+                type="button"
+                disabled={!connected || isExpired}
+                onClick={() => document.getElementById("document-upload-input")?.click()}
+                className="shrink-0 rounded-full p-2 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400 sm:p-2.5"
+                title="Send document"
+              >
+                <FileText className="h-4 w-4 sm:h-5 sm:w-5" />
               </button>
 
               <button

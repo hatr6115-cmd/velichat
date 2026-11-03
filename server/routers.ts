@@ -52,8 +52,8 @@ export const appRouter = router({
     send: publicProcedure.input(roomInput.extend({ body: z.string() })).mutation(({ input }) =>
       sendTemporaryMessage(input.roomId, input.inviteToken, input.memberId, input.body),
     ),
-    sendMedia: publicProcedure.input(roomInput.extend({ kind: z.enum(["voice", "photo", "video"]), dataUrl: z.string() })).mutation(({ input }) =>
-      sendTemporaryMedia(input.roomId, input.inviteToken, input.memberId, input.kind, input.dataUrl),
+    sendMedia: publicProcedure.input(roomInput.extend({ kind: z.enum(["voice", "photo", "video", "document"]), dataUrl: z.string(), fileName: z.string().max(180).optional(), mimeType: z.string().max(120).optional() })).mutation(({ input }) =>
+      sendTemporaryMedia(input.roomId, input.inviteToken, input.memberId, input.kind, input.dataUrl, input.fileName, input.mimeType),
     ),
     consumeMedia: publicProcedure.input(roomInput.extend({ mediaId: z.string().min(8).max(32) })).mutation(({ input }) =>
       consumeTemporaryMedia(input.roomId, input.inviteToken, input.memberId, input.mediaId),
