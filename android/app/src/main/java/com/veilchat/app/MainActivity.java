@@ -25,6 +25,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
 import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -38,24 +39,27 @@ public class MainActivity extends AppCompatActivity {
 
     private final ActivityResultLauncher<String[]> requestPermissionsLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
-                if (pendingWebPermission == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
-                boolean granted = true;
-                for (String resource : pendingWebPermission.getResources()) {
-                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)
-                            && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                        granted = false;
-                    }
-                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)
-                            && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                        granted = false;
-                    }
-                }
-                if (granted) {
-                    pendingWebPermission.grant(pendingWebPermission.getResources());
-                } else {
-                    pendingWebPermission.deny();
-                }
+                PermissionRequest request = pendingWebPermission;
                 pendingWebPermission = null;
+                if (request == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
+
+                List<String> grantedResources = new ArrayList<>();
+                for (String resource : request.getResources()) {
+                    String permission = androidPermissionForResource(resource);
+                    boolean granted = permission != null &&
+                            (Boolean.TRUE.equals(result.get(permission)) ||
+                                    ContextCompat.checkSelfPermission(MainActivity.this, permission)
+                                            == PackageManager.PERMISSION_GRANTED);
+                    if (granted) grantedResources.add(resource);
+                }
+
+                if (grantedResources.isEmpty()) {
+                    request.deny();
+                } else {
+                    // Grant only what Android actually approved. In particular,
+                    // denying camera access must not also break a voice-only call.
+                    request.grant(grantedResources.toArray(new String[0]));
+                }
             });
 
     private final ActivityResultLauncher<String> filePickerLauncher =
@@ -101,8 +105,8 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Request initial camera and audio recording permissions
-        requestDevicePermissions();
+        // Camera/microphone access is requested only when a call or scanner
+        // actually needs it, and only for the resources requested by the page.
 
         // Load the chat room URL (supports deep links / invites passed via Intent)
         String targetUrl = DEFAULT_URL;
@@ -114,12 +118,14 @@ public class MainActivity extends AppCompatActivity {
         webView.loadUrl(targetUrl);
     }
 
-    private void requestDevicePermissions() {
-        String[] permissions = new String[]{
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO
-        };
-        requestPermissionsLauncher.launch(permissions);
+    private String androidPermissionForResource(String resource) {
+        if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
+            return Manifest.permission.RECORD_AUDIO;
+        }
+        if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
+            return Manifest.permission.CAMERA;
+        }
+        return null;
     }
 
     private void setupWebView() {
@@ -163,36 +169,45 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
 
-            // Grant only the Android permission(s) the current WebRTC request needs.
+            // Bridge WebRTC/QR permissions to the matching Android runtime
+            // permissions. A voice call asks for the microphone only; a video
+            // call asks for camera and microphone.
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
                     request.deny();
                     return;
                 }
-                ArrayList<String> permissions = new ArrayList<>();
-                boolean needsCamera = false;
-                boolean needsMicrophone = false;
+
+                List<String> grantableResources = new ArrayList<>();
+                List<String> missingPermissions = new ArrayList<>();
                 for (String resource : request.getResources()) {
-                    needsCamera |= PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource);
-                    needsMicrophone |= PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource);
+                    String permission = androidPermissionForResource(resource);
+                    if (permission == null) continue;
+                    grantableResources.add(resource);
+                    if (ContextCompat.checkSelfPermission(MainActivity.this, permission)
+                            != PackageManager.PERMISSION_GRANTED && !missingPermissions.contains(permission)) {
+                        missingPermissions.add(permission);
+                    }
                 }
-                if (!needsCamera && !needsMicrophone) {
+
+                if (grantableResources.isEmpty()) {
                     request.deny();
                     return;
                 }
-                if (needsCamera && ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                    permissions.add(Manifest.permission.CAMERA);
+                if (missingPermissions.isEmpty()) {
+                    request.grant(grantableResources.toArray(new String[0]));
+                    return;
                 }
-                if (needsMicrophone && ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                    permissions.add(Manifest.permission.RECORD_AUDIO);
-                }
-                if (permissions.isEmpty()) {
-                    request.grant(request.getResources());
-                } else {
-                    pendingWebPermission = request;
-                    requestPermissionsLauncher.launch(permissions.toArray(new String[0]));
-                }
+
+                if (pendingWebPermission != null) pendingWebPermission.deny();
+                pendingWebPermission = request;
+                requestPermissionsLauncher.launch(missingPermissions.toArray(new String[0]));
+            }
+
+            @Override
+            public void onPermissionRequestDenied(PermissionRequest request) {
+                if (pendingWebPermission == request) pendingWebPermission = null;
             }
 
             // File selection for view-once photos and videos
@@ -218,5 +233,15 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         // Re-enforce capture protection whenever the app returns to the foreground.
         applySecureWindowFlag();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (pendingWebPermission != null) {
+            pendingWebPermission.deny();
+            pendingWebPermission = null;
+        }
+        if (webView != null) webView.destroy();
+        super.onDestroy();
     }
 }

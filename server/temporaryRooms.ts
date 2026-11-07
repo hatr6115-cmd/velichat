@@ -517,6 +517,14 @@ export function startTemporaryCall(
 ) {
   const room = requireRoom(roomId, inviteToken);
   const participant = getParticipant(room, memberId);
+  if (room.call) {
+    // A lost response can be retried safely, but a second participant must
+    // never replace an existing call and its WebRTC negotiation state.
+    if (room.call.initiatorId === memberId && room.call.kind === kind) {
+      return snapshot(room, memberId);
+    }
+    throw new Error("A call is already active in this room.");
+  }
   room.call = {
     initiatorId: memberId,
     initiatorAlias: participant.alias,

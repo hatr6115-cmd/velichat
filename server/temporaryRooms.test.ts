@@ -14,8 +14,8 @@ import {
   setTemporaryTyping,
   startTemporaryCall,
   joinTemporaryCall,
-  sendTemporaryCallSignal,
   endTemporaryCall,
+  sendTemporaryCallSignal,
   subscribeToRoomUpdates,
   validateAlias,
 } from "./temporaryRooms";
@@ -144,6 +144,37 @@ describe("temporary rooms", () => {
     expect(() => validateAlias("A")).toThrow();
     expect(() => validateAlias("email@example.com")).toThrow();
     expect(() => validateAlias("a".repeat(33))).toThrow();
+  });
+
+  it("preserves active voice/video call negotiation and rejects competing calls", () => {
+    const host = createTemporaryRoom("Host");
+    const guest = joinTemporaryRoom(host.roomId, host.inviteToken, "Guest");
+    const started = startTemporaryCall(host.roomId, host.inviteToken, host.currentMemberId, "audio");
+
+    expect(started.call?.participants).toEqual([host.currentMemberId]);
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId).call?.kind).toBe("audio");
+    expect(() => startTemporaryCall(host.roomId, host.inviteToken, guest.currentMemberId, "video"))
+      .toThrow("already active");
+
+    // Retrying the same mutation is idempotent and must not reset the call.
+    expect(startTemporaryCall(host.roomId, host.inviteToken, host.currentMemberId, "audio").call?.startedAt)
+      .toBe(started.call?.startedAt);
+
+    const joined = joinTemporaryCall(host.roomId, host.inviteToken, guest.currentMemberId);
+    expect(joined.call?.participants).toEqual([host.currentMemberId, guest.currentMemberId]);
+
+    const offer = JSON.stringify({ type: "offer", sdp: "host-offer" });
+    sendTemporaryCallSignal(host.roomId, host.inviteToken, host.currentMemberId, guest.currentMemberId, "offer", offer);
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId).signals[0]?.payload).toBe(offer);
+
+    const answer = JSON.stringify({ type: "answer", sdp: "guest-answer" });
+    sendTemporaryCallSignal(host.roomId, host.inviteToken, guest.currentMemberId, host.currentMemberId, "answer", answer);
+    const callerView = getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId);
+    expect(callerView.call?.answer).toBe(answer);
+    expect(callerView.call?.participants).toHaveLength(2);
+
+    expect(endTemporaryCall(host.roomId, host.inviteToken, guest.currentMemberId).call).toBeUndefined();
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).signals).toEqual([]);
   });
 
   it("subscribes to real-time room updates and receives instant broadcasts", () => {

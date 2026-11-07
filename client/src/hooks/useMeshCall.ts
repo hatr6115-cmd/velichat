@@ -28,10 +28,10 @@ const rtcConfig: RTCConfiguration = {
 };
 
 export function useMeshCall(session: Session | null, room: RoomSnapshot | null | undefined) {
-  const sendSignal = trpc.temporary.sendSignal.useMutation();
-  const startCall = trpc.temporary.startCall.useMutation();
-  const joinCall = trpc.temporary.joinCall.useMutation();
-  const endCall = trpc.temporary.endCall.useMutation();
+  const { mutateAsync: sendSignal } = trpc.temporary.sendSignal.useMutation();
+  const { mutateAsync: startCall } = trpc.temporary.startCall.useMutation();
+  const { mutateAsync: joinCall } = trpc.temporary.joinCall.useMutation();
+  const { mutateAsync: endCall } = trpc.temporary.endCall.useMutation();
 
   const [isInCall, setIsInCall] = useState(false);
   const [isInitiator, setIsInitiator] = useState(false);
@@ -41,6 +41,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const [remoteStreams, setRemoteStreams] = useState<RemoteEntry[]>([]);
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isCamOff, setIsCamOff] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
 
   const localRef = useRef<MediaStream | null>(null);
@@ -49,11 +50,15 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const creatingRef = useRef(new Set<string>());
   const processedSignalsRef = useRef(new Set<string>());
   const acceptedRef = useRef(false);
+  const startingRef = useRef(false);
+  const observedCallRef = useRef(false);
   const missingCallTimerRef = useRef<number | undefined>(undefined);
+  const latestRoomRef = useRef(room);
+  latestRoomRef.current = room;
 
   const send = useCallback(async (receiverId: string, type: "offer" | "answer" | "ice" | "end", payload: unknown) => {
     if (!session) return;
-    await sendSignal.mutateAsync({
+    await sendSignal({
       roomId: session.roomId,
       inviteToken: session.inviteToken,
       memberId: session.memberId,
@@ -90,6 +95,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     creatingRef.current.clear();
     processedSignalsRef.current.clear();
     acceptedRef.current = false;
+    observedCallRef.current = false;
     localRef.current?.getTracks().forEach((track) => track.stop());
     localRef.current = null;
     setLocalStream(null);
@@ -243,7 +249,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       const stream = await getMedia(kind);
       localRef.current = stream;
       setLocalStream(stream);
-      await joinCall.mutateAsync({ roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId });
+      await joinCall({ roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId });
       setIsInCall(true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to access your microphone or camera.";
@@ -253,7 +259,9 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   }, [cleanup, getMedia, joinCall, room, session]);
 
   const start = useCallback(async (kind: CallKind) => {
-    if (!session || !room || room.participantCount < 2 || isInCall) return;
+    if (!session || !room || room.participantCount < 2 || room.call || isInCall || startingRef.current) return;
+    startingRef.current = true;
+    setIsStarting(true);
     cleanup();
     setCallError(null);
     try {
@@ -264,18 +272,21 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       setIsInitiator(true);
       setIsInCall(true);
       setCallStatus("calling");
-      await startCall.mutateAsync({ roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId, kind });
+      await startCall({ roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId, kind });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to start the call. Check microphone and camera permissions.";
       cleanup();
       setCallError(message);
+    } finally {
+      startingRef.current = false;
+      setIsStarting(false);
     }
   }, [cleanup, getMedia, isInCall, room, session, startCall]);
 
   const hangup = useCallback(async () => {
     if (session) {
       await send("all", "end", {}).catch(() => undefined);
-      await endCall.mutateAsync({ roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId }).catch(() => undefined);
+      await endCall({ roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId }).catch(() => undefined);
     }
     cleanup();
   }, [cleanup, endCall, send, session]);
@@ -283,8 +294,17 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const reject = hangup;
 
   useEffect(() => {
-    if (!session || !room) return;
+    if (!session) {
+      if (isInCall || localRef.current) cleanup();
+      return;
+    }
+    if (!room) return;
     if (room.call) {
+      observedCallRef.current = true;
+      // Starting a call updates local state before the server snapshot arrives.
+      // Only an observed call may time out, and any active snapshot cancels it.
+      if (missingCallTimerRef.current) window.clearTimeout(missingCallTimerRef.current);
+      missingCallTimerRef.current = undefined;
       if (room.call.kind !== callKind && !isInCall) setCallKind(room.call.kind);
       if (room.call.initiatorId !== session.memberId && !isInCall) {
         setCallStatus("ringing");
@@ -298,10 +318,10 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
           if (room.call.initiatorId === session.memberId) void createPeer(remoteId, true);
         }
       }
-    } else if (isInCall && !missingCallTimerRef.current) {
+    } else if (isInCall && observedCallRef.current && !missingCallTimerRef.current) {
       missingCallTimerRef.current = window.setTimeout(() => {
         missingCallTimerRef.current = undefined;
-        if (!room?.call) cleanup();
+        if (!latestRoomRef.current?.call) cleanup();
       }, 4000);
     }
 
@@ -374,6 +394,8 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     void processSignals();
   }, [attachLocalTracks, callKind, cleanup, createPeer, flushIce, isInCall, room, send, session]);
 
+  useEffect(() => cleanup, [cleanup]);
+
   return {
     isInCall,
     isInitiator,
@@ -384,6 +406,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     callError,
     isMicMuted,
     isCamOff,
+    isStarting,
     start,
     accept,
     reject,
