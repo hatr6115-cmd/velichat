@@ -156,13 +156,20 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
 
   const attachLocalTracks = useCallback(async (pc: RTCPeerConnection, stream: MediaStream) => {
     for (const track of stream.getTracks()) {
-      const existingSender = pc.getTransceivers()
-        .find((transceiver) => transceiver.receiver.track?.kind === track.kind && !transceiver.sender.track)
-        ?.sender;
+      const transceiver = pc
+        .getTransceivers()
+        .find((item) => item.receiver.track.kind === track.kind && !item.sender.track);
       let sender: RTCRtpSender | undefined;
-      if (existingSender) {
-        await existingSender.replaceTrack(track);
-        sender = existingSender;
+      if (transceiver) {
+        // A transceiver created by the remote offer starts out receiving only.
+        // replaceTrack() attaches the track but never changes the direction, so
+        // the answer would still be recvonly and the caller would never get our
+        // camera/mic. Flip the direction as well, before creating the answer.
+        if (transceiver.direction === "recvonly" || transceiver.direction === "inactive") {
+          transceiver.direction = "sendrecv";
+        }
+        if (transceiver.sender.track?.id !== track.id) await transceiver.sender.replaceTrack(track);
+        sender = transceiver.sender;
       } else if (!pc.getSenders().some((item) => item.track?.id === track.id)) {
         sender = pc.addTrack(track, stream);
       }

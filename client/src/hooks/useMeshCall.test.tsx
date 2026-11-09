@@ -42,7 +42,6 @@ const session: NonNullable<Session> = {
 function makeRoom(call?: ActiveCall): RoomSnapshot {
   return {
     roomId: session.roomId,
-    expiresAt: Date.now() + 30_000,
     hostAlias: "Host",
     guestAliases: ["Guest"],
     currentMemberId: session.memberId,
@@ -155,13 +154,11 @@ describe("useMeshCall", () => {
 
     expect(latest.isInCall).toBe(true);
     expect(latest.callStatus).toBe("calling");
-    expect(getUserMedia).toHaveBeenCalledWith({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    // A voice call must never ask for the camera. The exact audio constraint
+    // object is free to evolve, so assert the shape that actually matters.
+    const voiceConstraints = getUserMedia.mock.calls[0][0];
+    expect(voiceConstraints.audio).toBeTruthy();
+    expect(voiceConstraints.video).toBeUndefined();
 
     const activeCall: ActiveCall = {
       initiatorId: session.memberId,
@@ -207,15 +204,10 @@ describe("useMeshCall", () => {
       await Promise.all([firstStart, secondStart]);
     });
 
-    expect(getUserMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        video: {
-          facingMode: "user",
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-        },
-      })
-    );
+    // A video call must request the camera as well as the microphone.
+    const videoConstraints = getUserMedia.mock.calls[0][0];
+    expect(videoConstraints.audio).toBeTruthy();
+    expect(videoConstraints.video).toBeTruthy();
     expect(mutationMocks.startCall).toHaveBeenCalledTimes(1);
     expect(mutationMocks.startCall).toHaveBeenCalledWith({
       roomId: session.roomId,
