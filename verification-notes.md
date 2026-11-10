@@ -1,5 +1,21 @@
 # VeilChat verification notes
 
+## Current implementation and verification (2026-11-10)
+
+- Removed the automatic room lifetime and expiry-extension controls. New invites omit expiry timestamps; legacy invite payloads with past timestamps remain parseable.
+- The browser saves the active room credentials locally, restores them after a page refresh, and retains them through temporary network/query failures while SSE and fallback polling reconnect. An explicit offline logout is queued locally and retried on reconnect/app start.
+- Audio/video calling, responsive chat controls, typing presence, copy/paste, view-once media, and native Android `FLAG_SECURE` protections are implemented. Browser screenshot/recording prevention cannot be guaranteed.
+- `corepack pnpm check` passed; `corepack pnpm test` passed (14 tests); `corepack pnpm build` passed; `git diff --check` passed. The production build reports a large JavaScript chunk warning.
+- The live preview smoke test returned HTTP 200 for `/` and `/api/health`.
+- Added `scripts/keep-render-awake.mjs` and a GitHub Actions workflow scheduled every 5 minutes, with retries and a health check. The script was smoke-tested against the local preview; an actual scheduled GitHub Actions run against Render was not run here. The previous 14-minute workflow's recent run history showed multi-hour gaps, so GitHub scheduling is best-effort, not a no-cold-start guarantee. The updated schedule takes effect from the default branch after merge and may also be delayed by GitHub.
+- The server already self-pings its Render URL while awake, and the client pings on page load; the scheduled workflow is the external wake-up path.
+- No Android Gradle/device build or current browser visual/inter-device call test was run.
+- Room state and transcripts remain in server memory, not the database. A server process restart still loses active rooms; refresh/network recovery works only while that process retains the room.
+
+## Historical visual notes (before room-timer removal)
+
+The following preview observations document earlier designs and are retained as history; countdown/timer references below no longer describe the current room UI.
+
 The managed preview loaded the cyberpunk landing page with the alias-first CTA, bold cyan and magenta display typography, HUD corner brackets, protocol steps, participant/timer/memory indicators, and the privacy-boundary warning.
 
 A live preview test entered the alias `NeonWisp` and created a temporary room successfully. The room screen showed a 30-minute countdown, `END CHAT`, a waiting state, a generated scannable QR code, `Share`, `Download QR`, `Copy link`, and `Scan an invite` controls. The QR invitation was visually legible in the desktop preview.

@@ -37,7 +37,7 @@ export default function TemporaryQr({ inviteUrl, onScan, onClose, inline = false
       try {
         await navigator.share({
           title: "VeilChat Temporary Room",
-          text: "Join my temporary private chat on VeilChat (auto-expires in 30m)",
+          text: "Join my private chat on VeilChat",
           url: inviteUrl,
         });
       } catch {

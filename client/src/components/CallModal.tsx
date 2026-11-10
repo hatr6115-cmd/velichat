@@ -63,11 +63,16 @@ export const CallModal: React.FC<CallModalProps> = ({
   }, [callStatus]);
   const duration = `${String(Math.floor(callDuration / 60)).padStart(2, "0")}:${String(callDuration % 60).padStart(2, "0")}`;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-6">
-      <div className="relative flex h-[88vh] max-h-[720px] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl dark:bg-zinc-900">
-        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-          <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{kind === "video" ? "Video call" : "Voice call"}</span>
-          {callStatus === "connected" && <span className="font-mono text-xs text-zinc-500">{duration}</span>}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black p-0 sm:bg-black/80 sm:p-6">
+      <div className="relative flex h-[100dvh] max-h-[100dvh] w-full max-w-none flex-col overflow-hidden bg-white shadow-2xl dark:bg-zinc-900 sm:h-[88vh] sm:max-h-[720px] sm:max-w-4xl sm:rounded-3xl">
+        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))] dark:border-zinc-800 sm:pt-3">
+          <div className="min-w-0">
+            <span className="block text-sm font-semibold text-zinc-900 dark:text-zinc-100">{kind === "video" ? "Video call" : "Voice call"}</span>
+            <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">
+              {callStatus === "ringing" ? `${partnerAlias} is calling` : callStatus === "connected" ? "Connected" : "Connecting…"}
+            </span>
+          </div>
+          {callStatus === "connected" && <span className="ml-3 font-mono text-xs text-zinc-500 dark:text-zinc-400">{duration}</span>}
         </div>
         <div className={`relative grid flex-1 gap-2 bg-zinc-950 p-2 ${remoteStreams.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
           {remoteStreams.length ? remoteStreams.map((item) => <RemoteTile key={item.memberId} item={item} kind={kind} />) : (
@@ -80,7 +85,7 @@ export const CallModal: React.FC<CallModalProps> = ({
             <video ref={localVideoRef} autoPlay playsInline muted className="absolute right-4 top-4 z-10 h-32 w-24 rounded-xl border border-white/30 object-cover sm:h-44 sm:w-32" />
           )}
         </div>
-        <div className="flex items-center justify-center gap-3 border-t border-zinc-200 bg-zinc-50 px-4 py-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="flex items-center justify-center gap-3 border-t border-zinc-200 bg-zinc-50 px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))] dark:border-zinc-800 dark:bg-zinc-900 sm:pb-4">
           {callStatus === "ringing" && !isInitiator ? (
             <>
               <button type="button" onClick={onReject} className="rounded-full bg-red-100 px-5 py-2 text-xs font-medium text-red-700">Decline</button>

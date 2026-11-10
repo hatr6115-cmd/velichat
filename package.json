@@ -11,6 +11,7 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
+    "keep:render-awake": "node scripts/keep-render-awake.mjs",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
   },
   "dependencies": {
