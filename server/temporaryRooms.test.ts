@@ -12,6 +12,10 @@ import {
   sendTemporaryMedia,
   consumeTemporaryMedia,
   setTemporaryTyping,
+  startTemporaryCall,
+  joinTemporaryCall,
+  sendTemporaryCallSignal,
+  endTemporaryCall,
   subscribeToRoomUpdates,
   validateAlias,
 } from "./temporaryRooms";
@@ -23,7 +27,6 @@ describe("temporary rooms", () => {
     const room = createTemporaryRoom("ShadowFox");
     expect(room.hostAlias).toBe("ShadowFox");
     expect(room.participantCount).toBe(1);
-    expect(room.expiresAt).toBeGreaterThan(Date.now());
     expect(roomCountForTests()).toBe(1);
   });
 
@@ -44,16 +47,20 @@ describe("temporary rooms", () => {
     expect(view.messages.map((message) => [message.alias, message.body])).toEqual([["Host", "hello"], ["Guest", "hi back"]]);
     leaveTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId);
     expect(roomCountForTests()).toBe(0);
-    expect(() => getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId)).toThrow("invalid or expired");
+    expect(() => getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId)).toThrow("invalid, closed, or no longer available");
   });
 
-  it("expires room access after thirty minutes", () => {
+  it("keeps the room available across time and closes it only when the participant logs out", () => {
     vi.useFakeTimers();
     try {
-      const room = createTemporaryRoom("Timer");
-      vi.advanceTimersByTime(30 * 60 * 1000 + 1);
-      expect(() => getTemporaryRoom(room.roomId, room.inviteToken, room.currentMemberId)).toThrow("invalid or expired");
+      const room = createTemporaryRoom("LongTerm");
+      vi.advanceTimersByTime(365 * 24 * 60 * 60 * 1000);
+      expect(getTemporaryRoom(room.roomId, room.inviteToken, room.currentMemberId).currentAlias).toBe("LongTerm");
+      expect(roomCountForTests()).toBe(1);
+
+      leaveTemporaryRoom(room.roomId, room.inviteToken, room.currentMemberId);
       expect(roomCountForTests()).toBe(0);
+      expect(() => getTemporaryRoom(room.roomId, room.inviteToken, room.currentMemberId)).toThrow("no longer available");
     } finally {
       vi.useRealTimers();
     }
@@ -99,6 +106,32 @@ describe("temporary rooms", () => {
     expect(photoConsumed.media.find((item) => item.id === photo.media[1]!.id)?.dataUrl).toBeUndefined();
     const videoConsumed = consumeTemporaryMedia(host.roomId, host.inviteToken, guest.currentMemberId, video.media[2]!.id);
     expect(videoConsumed.media.find((item) => item.id === video.media[2]!.id)?.dataUrl).toBeUndefined();
+  });
+
+  it("sets up audio/video calls with ephemeral signaling and clears them on hangup", () => {
+    const host = createTemporaryRoom("Host");
+    const guest = joinTemporaryRoom(host.roomId, host.inviteToken, "Guest");
+
+    for (const kind of ["audio", "video"] as const) {
+      const ringing = startTemporaryCall(host.roomId, host.inviteToken, host.currentMemberId, kind);
+      expect(ringing.call?.kind).toBe(kind);
+      expect(getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId).call?.initiatorAlias).toBe("Host");
+
+      const joined = joinTemporaryCall(host.roomId, host.inviteToken, guest.currentMemberId);
+      expect(joined.call?.participants).toEqual([host.currentMemberId, guest.currentMemberId]);
+      sendTemporaryCallSignal(
+        host.roomId,
+        host.inviteToken,
+        host.currentMemberId,
+        guest.currentMemberId,
+        "offer",
+        JSON.stringify({ type: "offer", sdp: "ephemeral-test-offer" }),
+      );
+      expect(getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId).signals.some((signal) => signal.type === "offer")).toBe(true);
+
+      endTemporaryCall(host.roomId, host.inviteToken, guest.currentMemberId);
+      expect(getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).call).toBeUndefined();
+    }
   });
 
   it("rejects invalid media formats", () => {

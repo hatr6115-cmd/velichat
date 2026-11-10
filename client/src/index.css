@@ -103,3 +103,18 @@ body {
 .animate-scan {
   animation: scanline 2.4s ease-in-out infinite;
 }
+
+/* Best-effort friction against saving/dragging view-once media in a browser.
+   This is not a screenshot/recording barrier; the native Android wrapper uses
+   FLAG_SECURE for OS-level capture protection. */
+.protected-media,
+.protected-media * {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.protected-media img,
+.protected-media video {
+  -webkit-user-drag: none;
+}

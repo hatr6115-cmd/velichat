@@ -5,7 +5,6 @@ import {
   Camera,
   Check,
   CheckCheck,
-  Clock3,
   Copy,
   Dice5,
   Download,
@@ -30,6 +29,7 @@ import {
   Volume2,
   Video,
   Phone,
+  WifiOff,
   PlusCircle,
   X,
 } from "lucide-react";
@@ -80,11 +80,45 @@ type Session = {
   invite: TemporaryInvite;
 };
 
-function formatRemaining(expiresAt: number, now: number) {
-  const seconds = Math.max(0, Math.ceil((expiresAt - now) / 1000));
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+const ACTIVE_ROOM_STORAGE_KEY = "veilchat.active-room.v1";
+const PENDING_ROOM_LEAVE_STORAGE_KEY = "veilchat.pending-room-leave.v1";
+
+type PendingRoomLeave = Pick<Session, "roomId" | "inviteToken" | "memberId">;
+
+function readSavedSession(): Session | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_ROOM_STORAGE_KEY);
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as Partial<Session>;
+    if (
+      typeof stored.roomId !== "string" ||
+      typeof stored.inviteToken !== "string" ||
+      typeof stored.memberId !== "string" ||
+      typeof stored.alias !== "string" ||
+      !stored.invite
+    ) {
+      throw new Error("Invalid saved room session");
+    }
+    const invite = parseTemporaryInvite(JSON.stringify(stored.invite));
+    if (invite.roomId !== stored.roomId || invite.inviteToken !== stored.inviteToken) {
+      throw new Error("Saved room invite does not match the session");
+    }
+    return {
+      roomId: stored.roomId,
+      inviteToken: stored.inviteToken,
+      memberId: stored.memberId,
+      alias: stored.alias,
+      invite,
+    };
+  } catch {
+    try {
+      window.localStorage.removeItem(ACTIVE_ROOM_STORAGE_KEY);
+    } catch {
+      /* browser storage can be unavailable */
+    }
+    return null;
+  }
 }
 
 function validateAlias(alias: string) {
@@ -112,17 +146,18 @@ export default function Home() {
     } catch {
       return {
         invite: null as TemporaryInvite | null,
-        error: "Invite link is invalid or expired.",
+        error: "Invite link is invalid."
       };
     }
   });
 
   const [invite, setInvite] = useState<TemporaryInvite | null>(inviteState.invite);
   const [alias, setAlias] = useState("");
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<Session | null>(() => readSavedSession());
   const [message, setMessage] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
+  const [roomConnectionError, setRoomConnectionError] = useState<string | null>(null);
   const [error, setError] = useState(inviteState.error);
 
   // Modals & Extras
@@ -156,16 +191,47 @@ export default function Home() {
   const joinCallMutation = trpc.temporary.joinCall.useMutation();
   const endCallMutation = trpc.temporary.endCall.useMutation();
   const sendSignalMutation = trpc.temporary.sendSignal.useMutation();
-  const extendExpiryMutation = trpc.temporary.extendExpiry.useMutation();
 
   const typingTimerRef = useRef<number | undefined>(undefined);
   const recordingTimerRef = useRef<number | undefined>(undefined);
+  const photoTimerRef = useRef<number | undefined>(undefined);
+  const videoTimerRef = useRef<number | undefined>(undefined);
   const messageNodesRef = useRef(new Map<string, HTMLElement>());
   const messageListRef = useRef<HTMLDivElement>(null);
   const readObserverRef = useRef<IntersectionObserver | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const pendingLeaveInFlightRef = useRef(false);
+
+  function closeActivePhoto() {
+    if (photoTimerRef.current !== undefined) window.clearInterval(photoTimerRef.current);
+    photoTimerRef.current = undefined;
+    setActivePhoto(null);
+  }
+
+  function closeActiveVideo() {
+    if (videoTimerRef.current !== undefined) window.clearInterval(videoTimerRef.current);
+    videoTimerRef.current = undefined;
+    setActiveVideo(null);
+  }
+
+  // Dismiss view-once media when a browser tab/app is backgrounded. Native
+  // Android additionally applies FLAG_SECURE to block OS screenshots/recording.
+  useEffect(() => {
+    const hideProtectedMedia = () => {
+      if (document.visibilityState !== "visible") {
+        closeActivePhoto();
+        closeActiveVideo();
+      }
+    };
+    document.addEventListener("visibilitychange", hideProtectedMedia);
+    return () => {
+      document.removeEventListener("visibilitychange", hideProtectedMedia);
+      if (photoTimerRef.current !== undefined) window.clearInterval(photoTimerRef.current);
+      if (videoTimerRef.current !== undefined) window.clearInterval(videoTimerRef.current);
+    };
+  }, []);
 
   // Real-time SSE Stream
   const { data: sseData, isConnected: isSseConnected } = useRoomStream({
@@ -174,6 +240,7 @@ export default function Home() {
     memberId: session?.memberId || "",
     enabled: Boolean(session),
     onClosed: (reason) => {
+      setError(reason);
       setSession(null);
       setInvite(null);
       setLocation("/");
@@ -193,23 +260,126 @@ export default function Home() {
 
   const room = sseData || roomQuery.data;
 
-  const copyMessage = async (messageId: string, body: string) => {
-    if (window.VeilChatClipboard) {
-      window.VeilChatClipboard.copyText(body);
-    } else {
+  // Keep the room credentials on this device so a refresh can restore the same
+  // participant instead of accidentally joining as a duplicate guest.
+  useEffect(() => {
+    try {
+      if (session) window.localStorage.setItem(ACTIVE_ROOM_STORAGE_KEY, JSON.stringify(session));
+      else window.localStorage.removeItem(ACTIVE_ROOM_STORAGE_KEY);
+    } catch {
+      /* browser storage can be unavailable; the in-memory room still works */
+    }
+  }, [session]);
+
+  useEffect(() => {
+    const flushPendingRoomLeave = async () => {
+      if (!navigator.onLine || pendingLeaveInFlightRef.current) return;
+
+      let raw: string | null;
       try {
-        await navigator.clipboard.writeText(body);
+        raw = window.localStorage.getItem(PENDING_ROOM_LEAVE_STORAGE_KEY);
       } catch {
-        const textarea = document.createElement("textarea");
-        textarea.value = body;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.focus();
-        textarea.select();
-        document.execCommand("copy");
-        textarea.remove();
+        return;
       }
+      if (!raw) return;
+
+      let pendingLeave: PendingRoomLeave;
+      try {
+        const stored = JSON.parse(raw) as Partial<PendingRoomLeave>;
+        if (
+          typeof stored.roomId !== "string" ||
+          typeof stored.inviteToken !== "string" ||
+          typeof stored.memberId !== "string"
+        ) {
+          throw new Error("Invalid pending room leave");
+        }
+        pendingLeave = {
+          roomId: stored.roomId,
+          inviteToken: stored.inviteToken,
+          memberId: stored.memberId,
+        };
+      } catch {
+        try {
+          window.localStorage.removeItem(PENDING_ROOM_LEAVE_STORAGE_KEY);
+        } catch {
+          /* browser storage can be unavailable */
+        }
+        return;
+      }
+
+      pendingLeaveInFlightRef.current = true;
+      try {
+        await leaveRoom.mutateAsync(pendingLeave);
+        if (window.localStorage.getItem(PENDING_ROOM_LEAVE_STORAGE_KEY) === raw) {
+          window.localStorage.removeItem(PENDING_ROOM_LEAVE_STORAGE_KEY);
+        }
+      } catch (leaveError) {
+        const message = leaveError instanceof Error ? leaveError.message : "";
+        if (/invalid, closed, or no longer available|not a participant in this room/i.test(message)) {
+          try {
+            window.localStorage.removeItem(PENDING_ROOM_LEAVE_STORAGE_KEY);
+          } catch {
+            /* browser storage can be unavailable */
+          }
+        }
+      } finally {
+        pendingLeaveInFlightRef.current = false;
+      }
+    };
+
+    const retryPendingRoomLeave = () => void flushPendingRoomLeave();
+    const retryTimer = window.setInterval(retryPendingRoomLeave, 15_000);
+    window.addEventListener("online", retryPendingRoomLeave);
+    retryPendingRoomLeave();
+    return () => {
+      window.clearInterval(retryTimer);
+      window.removeEventListener("online", retryPendingRoomLeave);
+    };
+  }, [leaveRoom.mutateAsync]);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  const copyMessage = async (messageId: string, body: string) => {
+    let copied = false;
+    try {
+      if (window.VeilChatClipboard) {
+        window.VeilChatClipboard.copyText(body);
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(body);
+      } else {
+        throw new Error("Clipboard API unavailable");
+      }
+      copied = true;
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = body;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.top = "0";
+      textarea.style.left = "0";
+      textarea.style.width = "1px";
+      textarea.style.height = "1px";
+      textarea.style.fontSize = "16px";
+      textarea.style.opacity = "0.01";
+      document.body.appendChild(textarea);
+      textarea.focus({ preventScroll: true });
+      textarea.select();
+      copied = document.execCommand("copy");
+      textarea.remove();
+    }
+
+    if (!copied) {
+      toast.error("Could not copy. Select the message text to copy it.");
+      return;
     }
     setCopiedMessageId(messageId);
     window.setTimeout(() => setCopiedMessageId(current => current === messageId ? null : current), 1400);
@@ -233,19 +403,15 @@ export default function Home() {
   }, []);
 
 
-  // Sync active clock
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  // Handle room query errors
+  // Keep the session intact through network failures. SSE and the fallback query
+  // reconnect in the background, while the saved credentials restore the room on refresh.
   useEffect(() => {
     if (roomQuery.error && !isSseConnected) {
-      setError(roomQuery.error.message);
-      setSession(null);
+      setRoomConnectionError(roomQuery.error.message);
+    } else if (isSseConnected || roomQuery.data) {
+      setRoomConnectionError(null);
     }
-  }, [roomQuery.error, isSseConnected]);
+  }, [roomQuery.error, roomQuery.data, isSseConnected]);
 
   useEffect(() => {
     if (callError) toast.error(callError);
@@ -256,7 +422,7 @@ export default function Home() {
     if (messageListRef.current) {
       messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
     }
-  }, [room?.messages?.length, room?.media?.length, room?.typingAliases && room.typingAliases.length > 0]);
+  }, [room?.messages?.length, room?.media?.length]);
 
   // When guest connects, automatically dismiss QR modal
   useEffect(() => {
@@ -265,34 +431,20 @@ export default function Home() {
     }
   }, [room?.participantCount, isQrModalOpen]);
 
-  // Extend Room Time handler
-  const handleExtendRoomTime = async (minutes = 15) => {
-    if (!session) return;
-    try {
-      await extendExpiryMutation.mutateAsync({
-        roomId: session.roomId,
-        inviteToken: session.inviteToken,
-        memberId: session.memberId,
-        minutes,
-      });
-    } catch {
-      /* ignore */
-    }
-  };
-
   // Dismiss modals on Escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (isQrModalOpen) setIsQrModalOpen(false);
         if (isEndModalOpen) setIsEndModalOpen(false);
-        if (activePhoto) setActivePhoto(null);
+        if (activePhoto) closeActivePhoto();
+        if (activeVideo) closeActiveVideo();
         if (isScannerOpen) setIsScannerOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isQrModalOpen, isEndModalOpen, activePhoto, isScannerOpen]);
+  }, [isQrModalOpen, isEndModalOpen, activePhoto, activeVideo, isScannerOpen]);
 
   // Read receipts tracking via IntersectionObserver
   useEffect(() => {
@@ -399,7 +551,6 @@ export default function Home() {
         roomId: result.roomId,
         inviteToken: result.inviteToken,
         hostAlias: result.hostAlias,
-        expiresAt: result.expiresAt,
       });
       setSession({
         roomId: result.roomId,
@@ -534,6 +685,10 @@ export default function Home() {
 
   async function send() {
     if (!session) return;
+    if (!isOnline) {
+      toast.error("You’re offline. Your message will stay here until you reconnect.");
+      return;
+    }
 
     if (selectedPhoto) {
       try {
@@ -598,6 +753,7 @@ export default function Home() {
           body: message.trim(),
         });
         setMessage("");
+        if (textareaRef.current) textareaRef.current.style.height = "40px";
       } catch (cause: any) {
         console.warn("Error sending message:", cause);
       }
@@ -728,58 +884,68 @@ export default function Home() {
 
   async function openViewOncePhoto(item: { id: string; dataUrl?: string }) {
     if (!item.dataUrl) return;
-    const url = item.dataUrl;
-    setActivePhoto(url);
+    closeActivePhoto();
+    closeActiveVideo();
+    setActivePhoto(item.dataUrl);
     setPhotoCountdown(10);
     void consumeMediaOnce(item.id);
 
-    const timer = setInterval(() => {
-      setPhotoCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          setActivePhoto(null);
-          return 0;
-        }
-        return prev - 1;
-      });
+    let secondsLeft = 10;
+    photoTimerRef.current = window.setInterval(() => {
+      secondsLeft -= 1;
+      setPhotoCountdown(secondsLeft);
+      if (secondsLeft <= 0) closeActivePhoto();
     }, 1000);
   }
 
   async function openViewOnceVideo(item: { id: string; dataUrl?: string }) {
     if (!item.dataUrl) return;
-    const url = item.dataUrl;
-    setActiveVideo(url);
+    closeActivePhoto();
+    closeActiveVideo();
+    setActiveVideo(item.dataUrl);
     setVideoCountdown(30);
     void consumeMediaOnce(item.id);
 
-    const timer = setInterval(() => {
-      setVideoCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          setActiveVideo(null);
-          return 0;
-        }
-        return prev - 1;
-      });
+    let secondsLeft = 30;
+    videoTimerRef.current = window.setInterval(() => {
+      secondsLeft -= 1;
+      setVideoCountdown(secondsLeft);
+      if (secondsLeft <= 0) closeActiveVideo();
     }, 1000);
   }
 
   async function endRoom() {
     if (!session) return;
+    const pendingLeave: PendingRoomLeave = {
+      roomId: session.roomId,
+      inviteToken: session.inviteToken,
+      memberId: session.memberId,
+    };
+    const serializedPendingLeave = JSON.stringify(pendingLeave);
     try {
-      await leaveRoom.mutateAsync({
-        roomId: session.roomId,
-        inviteToken: session.inviteToken,
-        memberId: session.memberId,
-      });
+      window.localStorage.setItem(PENDING_ROOM_LEAVE_STORAGE_KEY, serializedPendingLeave);
     } catch {
-      /* ignore */
+      /* The server leave is still attempted if local storage is unavailable. */
     }
+
+    pendingLeaveInFlightRef.current = true;
     setSession(null);
     setInvite(null);
     setAlias("");
     setIsEndModalOpen(false);
     setLocation("/");
+
+    // Clear this device immediately; retry the server leave when connectivity returns.
+    try {
+      await leaveRoom.mutateAsync(pendingLeave);
+      if (window.localStorage.getItem(PENDING_ROOM_LEAVE_STORAGE_KEY) === serializedPendingLeave) {
+        window.localStorage.removeItem(PENDING_ROOM_LEAVE_STORAGE_KEY);
+      }
+    } catch {
+      /* The pending request is retried on reconnect, app start, and periodically. */
+    } finally {
+      pendingLeaveInFlightRef.current = false;
+    }
   }
 
   if (session) {
@@ -791,131 +957,124 @@ export default function Home() {
         : [room.hostAlias, ...(room.guestAliases || []).filter((a) => a !== session.alias)]
       : [];
     const partnerAlias = pCount === 2 ? otherAliases[0] : pCount > 2 ? `${pCount - 1} NODES` : undefined;
-    const roomExpiresAt = room?.expiresAt || session.invite.expiresAt;
-    const isExpired = roomExpiresAt <= now;
-    const remainingTime = formatRemaining(roomExpiresAt, now);
-    const isAboutToExpire = roomExpiresAt - now <= 5 * 60 * 1000; // <= 5 minutes
 
     return (
-      <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-full max-w-3xl mx-auto bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden transition-colors">
-        {/* Header */}
-        <header className="flex items-center justify-between gap-2 px-2.5 sm:px-4 py-2.5 sm:py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-20 shrink-0 shadow-xs">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+      <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-zinc-50 font-sans text-zinc-900 transition-colors dark:bg-zinc-950 dark:text-zinc-100 sm:mx-auto sm:max-w-3xl">
+        {/* Conversation header */}
+        <header className="z-20 flex shrink-0 flex-col gap-2 border-b border-zinc-200 bg-white px-3 py-2.5 pt-[calc(0.625rem+env(safe-area-inset-top))] shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:flex-row sm:items-center sm:justify-between sm:px-4 sm:py-3 sm:pt-3">
+          <div className="flex min-w-0 items-center gap-2.5">
             <div className="relative shrink-0">
-              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-xs sm:text-sm shadow-sm">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-xs font-semibold text-white shadow-sm">
                 {(connected ? partnerAlias || "Friend" : "Wait").slice(0, 2).toUpperCase()}
               </div>
               <span
-                className={`absolute bottom-0 right-0 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border-2 border-white dark:border-zinc-900 ${
-                  connected ? "bg-emerald-500" : "bg-zinc-400"
+                className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white dark:border-zinc-900 ${
+                  connected && isOnline && !roomConnectionError ? "bg-emerald-500" : !isOnline || roomConnectionError ? "bg-amber-500" : "bg-zinc-400"
                 }`}
               />
             </div>
 
-            <div className="min-w-0 max-w-[85px] xs:max-w-[120px] sm:max-w-none">
-              <span className="text-xs sm:text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate block">
-                {connected ? partnerAlias : "Waiting..."}
+            <div className="min-w-0 max-w-[70vw] sm:max-w-none">
+              <span className="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                {connected ? partnerAlias : !isOnline || roomConnectionError ? "Reconnecting to your room" : room ? "Waiting for your friend" : "Restoring your room…"}
               </span>
-              <span className="text-[10px] sm:text-xs text-zinc-500 dark:text-zinc-400 block truncate">
-                {connected ? `${pCount} online` : "Share link"}
+              <span className="block min-h-4 truncate text-[11px] text-zinc-500 dark:text-zinc-400" role="status" aria-live="polite">
+                {!isOnline || roomConnectionError ? "Reconnecting automatically" : room?.typingAliases?.length ? (
+                  <span className="inline-flex min-w-0 items-center gap-1.5 text-blue-600 dark:text-blue-400">
+                    <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-500 opacity-60" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-600" />
+                    </span>
+                    <span className="truncate">
+                      {room.typingAliases.length === 1
+                        ? `${room.typingAliases[0]} is typing…`
+                        : `${room.typingAliases.join(", ")} are typing…`}
+                    </span>
+                  </span>
+                ) : connected ? `${pCount} online` : room ? "Share an invite link to start" : "Your saved session is loading…"}
               </span>
             </div>
           </div>
 
-          {/* Actions */}
-          <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0 max-w-[70%] overflow-x-auto">
-            {/* Expiry Counter & +Time Button */}
-            <div
-              className={`flex items-center rounded-lg border px-1.5 py-1 text-[11px] sm:text-xs font-medium gap-1 shrink-0 transition-colors ${
-                isAboutToExpire
-                  ? "bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400 font-semibold animate-pulse"
-                  : "bg-zinc-100 dark:bg-zinc-800/90 border-zinc-200 dark:border-zinc-700/80 text-zinc-600 dark:text-zinc-300"
-              }`}
-              title="Time remaining before room closes"
-            >
-              <Clock3 className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
-              <span className="tabular-nums">{isExpired ? "00:00" : remainingTime}</span>
-              <button
-                type="button"
-                onClick={() => void handleExtendRoomTime(15)}
-                disabled={extendExpiryMutation.isPending}
-                title="Add 15 minutes to session"
-                className={`ml-0.5 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-bold transition-all ${
-                  isAboutToExpire
-                    ? "bg-red-600 hover:bg-red-700 text-white shadow-2xs"
-                    : "bg-white dark:bg-zinc-700 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 text-blue-600 dark:text-blue-300 shadow-2xs"
-                }`}
-              >
-                +15m
-              </button>
-            </div>
-
-            {/* Call Active Other Indicator */}
+          <div className="flex w-full items-center justify-between gap-1 sm:w-auto sm:justify-end sm:gap-1.5">
             {connected && room?.call && room.call.participants.length >= 2 && !room.call.participants.includes(session.memberId) && (
-              <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-medium px-2 py-1 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              <span className="hidden items-center gap-1 rounded-full bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 sm:flex">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
                 Line busy
               </span>
             )}
 
-            {/* Voice Call */}
             {connected && (
-              <button
-                type="button"
-                onClick={() => startCall("audio")}
-                disabled={isExpired || isInCall || Boolean(room?.call)}
-                title="Voice Call"
-                className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
-              >
-                <Phone className="w-4 h-4" />
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => startCall("audio")}
+                  disabled={!isOnline || isInCall || Boolean(room?.call)}
+                  title="Start voice call"
+                  aria-label="Start voice call"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-35 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
+                >
+                  <Phone className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => startCall("video")}
+                  disabled={!isOnline || isInCall || Boolean(room?.call)}
+                  title="Start video call"
+                  aria-label="Start video call"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-35 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
+                >
+                  <Video className="h-4 w-4" />
+                </button>
+              </>
             )}
 
-            {/* Video Call */}
-            {connected && (
-              <button
-                type="button"
-                onClick={() => startCall("video")}
-                disabled={isExpired || isInCall || Boolean(room?.call)}
-                title="Video Call"
-                className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 transition-colors"
-              >
-                <Video className="w-4 h-4" />
-              </button>
-            )}
-
-            {/* QR Invite */}
             <button
               type="button"
               onClick={() => setIsQrModalOpen(true)}
-              title="Show QR Code"
-              className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              title="Show QR code"
+              aria-label="Show QR code"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-blue-600 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
             >
-              <QrCode className="w-4 h-4" />
+              <QrCode className="h-4 w-4" />
             </button>
 
-            {/* Theme Toggle */}
             <button
               type="button"
               onClick={toggleTheme}
-              className="p-1.5 sm:p-2 rounded-full text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             >
-              {theme === "dark" ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-zinc-700" />}
-              <span className="hidden min-[360px]:inline text-[10px] font-medium">{theme === "dark" ? "Light" : "Dark"}</span>
+              {theme === "dark" ? <Sun className="h-4 w-4 text-amber-400" /> : <Moon className="h-4 w-4" />}
             </button>
 
-            {/* Exit Room */}
             <button
               type="button"
               onClick={() => setIsEndModalOpen(true)}
-              title="Leave Room"
-              className="p-1.5 sm:p-2 rounded-full text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
+              title="Log out of room"
+              aria-label="Log out of room"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40"
             >
-              <LogOut className="w-4 h-4" />
+              <LogOut className="h-4 w-4" />
             </button>
           </div>
         </header>
+
+        {(roomConnectionError || !isOnline) && (
+          <div
+            role="status"
+            title={roomConnectionError || undefined}
+            className="flex shrink-0 items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 sm:px-4"
+          >
+            <WifiOff className="h-4 w-4 shrink-0" />
+            <span>
+              {!isOnline
+                ? "You’re offline. Your room session is saved and will reconnect when you’re back online."
+                : "Connection interrupted. Reconnecting to your room automatically…"}
+            </span>
+          </div>
+        )}
 
         {/* Message Feed */}
         <main
@@ -923,13 +1082,17 @@ export default function Home() {
           className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 bg-zinc-100/70 dark:bg-zinc-950 overscroll-contain text-sm"
         >
           {!connected && (
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 sm:p-6 text-center max-w-sm mx-auto my-6 sm:my-8 shadow-xs space-y-3">
-              <div className="w-12 h-12 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center mx-auto">
-                <Users className="w-6 h-6" />
+            <div className="mx-auto my-6 max-w-sm space-y-3 rounded-2xl border border-zinc-200 bg-white p-5 text-center shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:my-8 sm:p-6">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                {!room || !isOnline || roomConnectionError ? <WifiOff className="h-6 w-6" /> : <Users className="h-6 w-6" />}
               </div>
-              <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Waiting for Someone to Join</h3>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                Share your invite link or let them scan the QR code to start chatting.
+              <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+                {!room || !isOnline || roomConnectionError ? "Restoring your room" : "Waiting for Someone to Join"}
+              </h3>
+              <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+                {!room || !isOnline || roomConnectionError
+                  ? "Your saved room session will reconnect automatically when the service is reachable."
+                  : "Share your invite link or let them scan the QR code to start chatting."}
               </p>
               <div className="flex gap-2 justify-center pt-2">
                 <button
@@ -953,8 +1116,18 @@ export default function Home() {
             </div>
           )}
 
+          {connected && !room?.messages.length && !room?.media.length && (
+            <div className="mx-auto flex min-h-[45vh] max-w-sm flex-col items-center justify-center px-6 text-center">
+              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600/10 text-blue-600 dark:text-blue-400">
+                <MessageSquare className="h-5 w-5" />
+              </div>
+              <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">You’re connected</p>
+              <p className="mt-1 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">Send a message, share a view-once photo, or start a call.</p>
+            </div>
+          )}
+
           {(room?.messages && room.messages.length > 0) || (room?.media && room.media.length > 0) ? (
-            <div className="space-y-3 max-w-2xl mx-auto">
+            <div className="mx-auto max-w-2xl space-y-3">
               {room?.messages?.map((item) => {
                 const isOwn = item.memberId === session.memberId;
                 return (
@@ -979,7 +1152,7 @@ export default function Home() {
                           : "bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-xs"
                       }`}
                     >
-                      <p className="whitespace-pre-wrap leading-relaxed text-sm break-words">{item.body}</p>
+                      <p className="select-text whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{item.body}</p>
 
                       <div
                         className={`flex items-center justify-end gap-1 text-[10px] mt-1 ${
@@ -1001,17 +1174,20 @@ export default function Home() {
                             )}
                           </span>
                         )}
-                        {!isOwn && (
-                          <button
-                            type="button"
-                            onClick={() => void copyMessage(item.id, item.body)}
-                            className="ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                            aria-label="Copy message"
-                          >
-                            <Copy className="h-3 w-3" />
-                            <span>{copiedMessageId === item.id ? "Copied" : "Copy"}</span>
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => void copyMessage(item.id, item.body)}
+                          className={`ml-1 inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] transition-colors ${
+                            isOwn
+                              ? "text-blue-100 hover:bg-blue-500 hover:text-white"
+                              : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                          }`}
+                          aria-label={copiedMessageId === item.id ? "Message copied" : "Copy message"}
+                          title="Copy message"
+                        >
+                          <Copy className="h-3 w-3" />
+                          <span>{copiedMessageId === item.id ? "Copied" : "Copy"}</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1121,12 +1297,6 @@ export default function Home() {
             </div>
           ) : null}
 
-          {room?.typingAliases && room.typingAliases.length > 0 && (
-            <div className="text-xs text-zinc-500 dark:text-zinc-400 italic max-w-2xl mx-auto animate-pulse flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping" />
-              <span>{room.typingAliases.join(", ")} is typing...</span>
-            </div>
-          )}
         </main>
 
         {/* Floating preview for selected photo */}
@@ -1178,8 +1348,15 @@ export default function Home() {
           </div>
         )}
 
-        {/* Input Bar */}
-        <footer className="p-2.5 sm:p-3 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 shrink-0 pb-[calc(0.6rem+env(safe-area-inset-bottom))]">
+        {/* Composer */}
+        <footer className="shrink-0 border-t border-zinc-200 bg-white p-2.5 pb-[calc(0.65rem+env(safe-area-inset-bottom))] dark:border-zinc-800 dark:bg-zinc-900 sm:p-3">
+          <p
+            className="mx-auto mb-2 flex max-w-2xl items-center gap-1.5 px-1 text-[10px] leading-tight text-zinc-500 dark:text-zinc-400"
+            title="The Android app blocks system screenshots and recording. Browser capture cannot be reliably prevented, and another device can always record the screen."
+          >
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <span>View-once media expires · Android blocks OS capture; browsers can’t guarantee it.</span>
+          </p>
           {isRecording ? (
             <div className="flex items-center justify-between gap-2 p-2 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 text-xs">
               <span className="flex items-center gap-1.5 font-medium pl-1 truncate">
@@ -1218,10 +1395,11 @@ export default function Home() {
 
               <button
                 type="button"
-                disabled={!connected || isExpired}
+                disabled={!connected || !isOnline}
                 onClick={() => document.getElementById("photo-upload-input")?.click()}
-                className="p-2 sm:p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors shrink-0"
+                className="flex h-10 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400 sm:w-10"
                 title="Send view-once photo"
+                aria-label="Attach a view-once photo"
               >
                 <ImageIcon className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
@@ -1239,10 +1417,11 @@ export default function Home() {
 
               <button
                 type="button"
-                disabled={!connected || isExpired}
+                disabled={!connected || !isOnline}
                 onClick={() => document.getElementById("video-upload-input")?.click()}
-                className="p-2 sm:p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors shrink-0"
+                className="flex h-10 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400 sm:w-10"
                 title="Send view-once video"
+                aria-label="Attach a view-once video"
               >
                 <Video className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
@@ -1260,47 +1439,56 @@ export default function Home() {
 
               <button
                 type="button"
-                disabled={!connected || isExpired}
+                disabled={!connected || !isOnline}
                 onClick={() => document.getElementById("document-upload-input")?.click()}
-                className="shrink-0 rounded-full p-2 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400 sm:p-2.5"
+                className="flex h-10 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400 sm:w-10"
                 title="Send document"
+                aria-label="Attach a document"
               >
                 <FileText className="h-4 w-4 sm:h-5 sm:w-5" />
               </button>
 
               <button
                 type="button"
-                disabled={!connected || isExpired}
+                disabled={!connected || !isOnline}
                 onClick={startRecording}
-                className="p-2 sm:p-2.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors shrink-0"
+                className="flex h-10 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400 sm:w-10"
                 title="Record voice note"
+                aria-label="Record a voice note"
               >
                 <Mic className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
 
-              <div className="flex-1 min-w-0">
-                <input
-                  ref={textareaRef as any}
+              <div className="min-w-0 flex-1">
+                <textarea
+                  ref={textareaRef}
+                  rows={1}
                   value={message}
-                  onChange={(e) => handleMessageChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
+                  onChange={(event) => {
+                    handleMessageChange(event.currentTarget.value);
+                    event.currentTarget.style.height = "40px";
+                    event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 120)}px`;
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
                       void send();
                     }
                   }}
-                  disabled={!connected || isExpired}
-                  placeholder={connected ? "Type a message..." : "Waiting for friend to connect..."}
-                  className="w-full bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 rounded-full px-3.5 sm:px-4 py-2 sm:py-2.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  disabled={!connected || !isOnline}
+                  placeholder={!isOnline ? "Reconnect to send messages…" : connected ? "Type a message…" : "Waiting for friend to connect…"}
+                  aria-label="Message"
+                  className="min-h-10 max-h-[120px] w-full resize-none overflow-y-auto rounded-2xl border border-zinc-200 bg-zinc-100 px-3.5 py-2 text-sm text-zinc-900 transition-all placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800/80 dark:text-zinc-100"
                 />
               </div>
 
               <button
                 type="button"
                 onClick={() => void send()}
-                disabled={!connected || isExpired || (!message.trim() && !selectedPhoto && !selectedVideo)}
-                className="p-2 sm:p-2.5 rounded-full bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white shadow-xs transition-colors flex items-center justify-center shrink-0"
+                disabled={!connected || !isOnline || (!message.trim() && !selectedPhoto && !selectedVideo && !selectedDocument)}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-xs transition-colors hover:bg-blue-700 disabled:opacity-40"
                 title="Send"
+                aria-label="Send message"
               >
                 <Send className="w-4 h-4" />
               </button>
@@ -1311,22 +1499,27 @@ export default function Home() {
         {/* View Once Photo Overlay */}
         {activePhoto && (
           <div
-            className="fixed inset-0 z-50 flex flex-col items-center justify-center p-4 bg-black/90 backdrop-blur-md"
-            onClick={() => setActivePhoto(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="View-once photo"
+            className="protected-media fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 p-4 backdrop-blur-md"
+            onClick={closeActivePhoto}
+            onContextMenu={(event) => event.preventDefault()}
+            onDragStart={(event) => event.preventDefault()}
           >
             <div className="flex items-center justify-between w-full max-w-md mb-3 text-white text-xs font-medium">
               <span className="flex items-center gap-1.5">
                 <Eye className="w-4 h-4 text-blue-400" /> Disappears in {photoCountdown}s
               </span>
               <button
-                onClick={() => setActivePhoto(null)}
-                className="px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 text-white font-medium"
+                onClick={closeActivePhoto}
+                className="rounded-full bg-white/10 px-3 py-1 font-medium text-white hover:bg-white/20"
               >
                 Close
               </button>
             </div>
-            <div className="rounded-2xl overflow-hidden border border-white/10 max-h-[75vh] shadow-2xl">
-              <img src={activePhoto} alt="View once message" className="max-h-[70vh] object-contain" />
+            <div className="max-h-[75vh] overflow-hidden rounded-2xl border border-white/10 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <img src={activePhoto} alt="View-once photo" draggable={false} className="max-h-[70vh] select-none object-contain" />
             </div>
           </div>
         )}
@@ -1334,8 +1527,13 @@ export default function Home() {
         {/* View Once Video Overlay */}
         {activeVideo && (
           <div
-            className="fixed inset-0 z-50 flex flex-col items-center justify-center p-4 bg-black/95 backdrop-blur-md"
-            onClick={() => setActiveVideo(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="View-once video"
+            className="protected-media fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 p-4 backdrop-blur-md"
+            onClick={closeActiveVideo}
+            onContextMenu={(event) => event.preventDefault()}
+            onDragStart={(event) => event.preventDefault()}
           >
             <div
               className="flex items-center justify-between w-full max-w-lg mb-3 text-white text-xs font-medium"
@@ -1345,8 +1543,8 @@ export default function Home() {
                 <Video className="w-4 h-4 text-blue-400" /> Disappears in {videoCountdown}s
               </span>
               <button
-                onClick={() => setActiveVideo(null)}
-                className="px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 text-white font-medium"
+                onClick={closeActiveVideo}
+                className="rounded-full bg-white/10 px-3 py-1 font-medium text-white hover:bg-white/20"
               >
                 Close
               </button>
@@ -1360,9 +1558,14 @@ export default function Home() {
                 autoPlay
                 playsInline
                 controls
-                controlsList="nodownload"
-                onEnded={() => setActiveVideo(null)}
-                className="max-h-[70vh] w-full object-contain"
+                controlsList="nodownload noremoteplayback"
+                disablePictureInPicture
+                disableRemotePlayback
+                draggable={false}
+                onContextMenu={(event) => event.preventDefault()}
+                onDragStart={(event) => event.preventDefault()}
+                onEnded={closeActiveVideo}
+                className="max-h-[70vh] w-full select-none object-contain"
               />
             </div>
           </div>
@@ -1424,9 +1627,9 @@ export default function Home() {
               </div>
 
               <div className="space-y-1">
-                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Leave Conversation?</h3>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                  Leave this conversation?
+                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Log out of this room?</h3>
+                <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+                  Your saved session will be removed from this device. When online, VeilChat will notify the room that you left.
                 </p>
               </div>
 
@@ -1441,7 +1644,7 @@ export default function Home() {
                   onClick={endRoom}
                   className="px-5 py-2 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-xs transition-colors"
                 >
-                  Leave & Delete
+                  Log out & leave
                 </button>
               </div>
             </div>
@@ -1454,7 +1657,7 @@ export default function Home() {
   const isJoin = Boolean(invite);
 
   return (
-    <div className="min-h-[100dvh] bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex flex-col p-4 sm:p-6 transition-colors selection:bg-blue-600 selection:text-white">
+    <div className="flex min-h-[100dvh] flex-col bg-zinc-50 p-4 pt-[calc(1rem+env(safe-area-inset-top))] text-zinc-900 transition-colors selection:bg-blue-600 selection:text-white dark:bg-zinc-950 dark:text-zinc-100 sm:p-6">
       {/* Header */}
       <header className="flex items-center justify-between max-w-2xl w-full mx-auto py-2">
         <div className="flex items-center gap-2.5">
@@ -1499,7 +1702,7 @@ export default function Home() {
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
               {isJoin
                 ? `You were invited to chat with ${invite?.hostAlias || "a friend"}.`
-                : "Temporary, private room. Disappears when you leave."}
+                : "Private room. It stays available until you leave."}
             </p>
           </div>
 
@@ -1547,8 +1750,12 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="pt-3 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-500 dark:text-zinc-400">
-            <a href={ANDROID_DOWNLOAD_URL} download className="text-blue-600 dark:text-blue-400 hover:underline">Download Android app</a>
+          <div className="border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+            <a href={ANDROID_DOWNLOAD_URL} download className="text-blue-600 hover:underline dark:text-blue-400">Download Android app</a>
+            <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed">
+              <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>Android blocks system screenshots and recording. Browsers can’t guarantee capture prevention.</span>
+            </p>
           </div>
         </div>
       </main>

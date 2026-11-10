@@ -20,7 +20,6 @@ export type ActiveCall = {
 
 import { nanoid } from "nanoid";
 
-export const ROOM_TTL_MS = 30 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 2_000;
 const MAX_VOICE_BYTES = 5 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
@@ -61,7 +60,6 @@ export type TemporaryMediaSnapshot = Omit<TemporaryMedia, "dataUrl"> & { dataUrl
 type Room = {
   id: string;
   inviteToken: string;
-  expiresAt: number;
   host: Participant;
   guests: Participant[];
   messages: TemporaryMessage[];
@@ -73,7 +71,6 @@ type Room = {
 
 export type RoomSnapshot = {
   roomId: string;
-  expiresAt: number;
   hostAlias: string;
   guestAlias?: string;
   guestAliases: string[];
@@ -119,7 +116,7 @@ export function notifyRoomSubscribers(roomId: string, closedReason?: string) {
   if (!room || closedReason) {
     roomSubs.forEach((sub) => {
       try {
-        sub.onClose(closedReason || "Room ended or expired.");
+        sub.onClose(closedReason || "The room has been closed.");
       } catch {
         /* ignore */
       }
@@ -176,20 +173,10 @@ export function validateAlias(alias: string) {
   return normalized;
 }
 
-function removeExpiredRooms(now = Date.now()) {
-  rooms.forEach((room, roomId) => {
-    if (room.expiresAt <= now) {
-      notifyRoomSubscribers(roomId, "Room has expired.");
-      rooms.delete(roomId);
-    }
-  });
-}
-
 function requireRoom(roomId: string, inviteToken: string) {
-  removeExpiredRooms();
   const room = rooms.get(roomId);
   if (!room || room.inviteToken !== inviteToken) {
-    throw new Error("This temporary chat invite is invalid or expired.");
+    throw new Error("This room is invalid, closed, or no longer available.");
   }
   return room;
 }
@@ -212,7 +199,6 @@ function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
 
   return {
     roomId: room.id,
-    expiresAt: room.expiresAt,
     hostAlias: room.host.alias,
     guestAlias: room.guests[0]?.alias,
     guestAliases: room.guests.map(g => g.alias),
@@ -240,7 +226,6 @@ function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
 }
 
 export function createTemporaryRoom(aliasInput: string, clientIp = "default") {
-  removeExpiredRooms();
   if (!checkRateLimit(`create:${clientIp}`, 15, 60_000)) {
     throw new Error("Too many room creation requests. Please wait a minute.");
   }
@@ -248,7 +233,6 @@ export function createTemporaryRoom(aliasInput: string, clientIp = "default") {
   const room: Room = {
     id: nanoid(16),
     inviteToken: nanoid(32),
-    expiresAt: Date.now() + ROOM_TTL_MS,
     host: { id: nanoid(12), alias },
     guests: [],
     messages: [],
@@ -464,7 +448,7 @@ export function consumeTemporaryMedia(roomId: string, inviteToken: string, membe
   getParticipant(room, memberId);
   const item = room.media.find((media) => media.id === mediaId);
   if (!item) throw new Error("This media is no longer available.");
-  if (item.kind === "document") throw new Error("Documents remain available until the room expires.");
+  if (item.kind === "document") throw new Error("Documents remain available until the room is closed.");
   if (item.memberId === memberId) throw new Error("Only the recipient can consume this media.");
   if (item.consumedBy.includes(memberId)) throw new Error("This media is no longer available.");
   
@@ -520,7 +504,6 @@ export function clearTemporaryRoomsForTests() {
 }
 
 export function roomCountForTests() {
-  removeExpiredRooms();
   return rooms.size;
 }
 
@@ -619,17 +602,4 @@ export function sendTemporaryCallSignal(
   });
   notifyRoomSubscribers(roomId);
   return { success: true as const };
-}
-
-export function extendRoomExpiry(roomId: string, inviteToken: string, memberId: string, additionalMinutes = 15) {
-  const room = requireRoom(roomId, inviteToken);
-  getParticipant(room, memberId);
-  const now = Date.now();
-  // Allow extending if within 10 minutes of expiry or already expired
-  const extensionMs = Math.max(1, Math.min(additionalMinutes, 60)) * 60 * 1000;
-  // Set new expiry capped at now + 2 hours to avoid stale idle rooms
-  room.expiresAt = Math.min(now + 2 * 60 * 60 * 1000, Math.max(room.expiresAt, now) + extensionMs);
-  const snap = snapshot(room, memberId);
-  notifyRoomSubscribers(roomId);
-  return snap;
 }

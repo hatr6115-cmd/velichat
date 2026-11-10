@@ -24,6 +24,8 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
+import java.util.ArrayList;
+
 public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
@@ -36,12 +38,24 @@ public class MainActivity extends AppCompatActivity {
 
     private final ActivityResultLauncher<String[]> requestPermissionsLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
-                if (pendingWebPermission != null) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        pendingWebPermission.grant(pendingWebPermission.getResources());
+                if (pendingWebPermission == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
+                boolean granted = true;
+                for (String resource : pendingWebPermission.getResources()) {
+                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)
+                            && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                        granted = false;
                     }
-                    pendingWebPermission = null;
+                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)
+                            && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                        granted = false;
+                    }
                 }
+                if (granted) {
+                    pendingWebPermission.grant(pendingWebPermission.getResources());
+                } else {
+                    pendingWebPermission.deny();
+                }
+                pendingWebPermission = null;
             });
 
     private final ActivityResultLauncher<String> filePickerLauncher =
@@ -58,13 +72,10 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // ENFORCE MAXIMUM PRIVACY: Prevent screenshots, screen recording, and recent app thumbnails
-        getWindow().setFlags(
-                WindowManager.LayoutParams.FLAG_SECURE,
-                WindowManager.LayoutParams.FLAG_SECURE
-        );
-
         super.onCreate(savedInstanceState);
+        // Android's secure-window flag blocks system screenshots, screen recording,
+        // and sensitive recent-app thumbnails for the entire WebView session.
+        applySecureWindowFlag();
         setContentView(R.layout.activity_main);
 
         // Dark status bar and navigation bar to match VeilChat theme
@@ -152,15 +163,35 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
 
-            // Grant WebRTC camera & microphone permissions for QR scan and voice notes
+            // Grant only the Android permission(s) the current WebRTC request needs.
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+                    request.deny();
+                    return;
+                }
+                ArrayList<String> permissions = new ArrayList<>();
+                boolean needsCamera = false;
+                boolean needsMicrophone = false;
+                for (String resource : request.getResources()) {
+                    needsCamera |= PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource);
+                    needsMicrophone |= PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource);
+                }
+                if (!needsCamera && !needsMicrophone) {
+                    request.deny();
+                    return;
+                }
+                if (needsCamera && ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                    permissions.add(Manifest.permission.CAMERA);
+                }
+                if (needsMicrophone && ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    permissions.add(Manifest.permission.RECORD_AUDIO);
+                }
+                if (permissions.isEmpty()) {
+                    request.grant(request.getResources());
+                } else {
                     pendingWebPermission = request;
-                    requestPermissionsLauncher.launch(new String[]{
-                            Manifest.permission.CAMERA,
-                            Manifest.permission.RECORD_AUDIO
-                    });
+                    requestPermissionsLauncher.launch(permissions.toArray(new String[0]));
                 }
             }
 
@@ -178,13 +209,14 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void applySecureWindowFlag() {
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
-        // Re-enforce FLAG_SECURE whenever user resumes the application
-        getWindow().setFlags(
-                WindowManager.LayoutParams.FLAG_SECURE,
-                WindowManager.LayoutParams.FLAG_SECURE
-        );
+        // Re-enforce capture protection whenever the app returns to the foreground.
+        applySecureWindowFlag();
     }
 }

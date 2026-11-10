@@ -3,7 +3,9 @@
 - [x] Establish the alias-first temporary chat domain model
 - [x] Build the cyberpunk landing page with responsive layout and HUD framing
 - [x] Add alias validation with no identifying information requirements
-- [x] Create one-time two-person rooms with a 30-minute expiry
+- [x] Keep rooms available without an automatic timer until logout or closure
+- [x] Restore the same room session after a page refresh
+- [x] Keep the session through temporary network loss and reconnect automatically
 - [x] Allow either participant to end a room early
 - [x] Generate temporary QR invitations
 - [x] Add share, download-QR, and copy-link actions
@@ -11,13 +13,15 @@
 - [x] Allow one recipient to join with a chosen alias
 - [x] Enforce the two-participant room limit
 - [x] Add room-only temporary messaging
-- [x] Show clear expired, ended, invalid, and full-room states
-- [x] Add privacy-boundary copy covering screenshots, copied content, browser/device storage, network metadata, and service restarts
+- [x] Show clear ended, invalid, and full-room states
+- [x] Disclose that Android blocks OS capture while browsers and external cameras cannot be guaranteed
 - [x] Keep messages out of persistent application tables
-- [x] Add unit tests for aliases, invite payloads, room creation, joining, messaging, expiry, and teardown
+- [x] Add unit tests for aliases, invite payloads, room creation, joining, messaging, and teardown
 - [x] Verify desktop and mobile responsive flows
 - [x] Run type checking, tests, and production build
 - [x] Capture visual verification screenshots
+- [x] Ping the Render health endpoint on app visits and keep the active service warm
+- [x] Add a retrying GitHub Actions Render keep-alive check every 5 minutes
 
 ## Ephemeral interaction signals
 
@@ -53,7 +57,7 @@
 - [x] Reduce dashboard and room copy to essential labels and instructions
 - [x] Replace the multi-color cyberpunk palette with a restrained professional palette
 - [x] Remove decorative HUD fragments and unnecessary promotional wording
-- [x] Preserve clear QR, alias, room, privacy, and expiry actions
+- [x] Preserve clear QR, alias, room, and privacy controls
 - [x] Verify typography, contrast, spacing, and responsive usability after simplification
 
 ## Final professional polish
@@ -64,22 +68,21 @@
 
 ## Active-room visual verification
 
-- [x] Browser-verify the simplified active room on desktop, including timer, message list, composer, privacy note, and QR panel
+- [x] Browser-verify the simplified active room on desktop, including room status, message list, composer, privacy note, and QR panel
 - [x] Browser-verify the simplified active room at a narrow mobile viewport
 - [x] Record post-redesign active-room findings for desktop and mobile
 
 ## Ephemeral media
 
-- [ ] Add in-memory voice-note media items with strict size and MIME validation
-- [ ] Add voice-note recording and sending controls
-- [ ] Allow each voice note to be played once by the recipient, then consume it
-- [ ] Add in-memory view-once photo items with strict size and MIME validation
-- [ ] Add photo selection and sending controls
-- [ ] Allow each recipient to open a view-once photo once, then consume it
-- [ ] Remove consumed media from room state and clear it on expiry or teardown
-- [ ] Add concise privacy copy explaining screenshots, recording, device caching, and service restarts
-- [ ] Add unit tests for media validation, one-play, one-view, expiry, and teardown
-- [ ] Verify voice and photo controls on desktop and mobile layouts
+- [x] Add in-memory voice-note, photo, and video items with size and MIME validation
+- [x] Add voice-note recording and sending controls
+- [x] Allow recipients to play voice notes once, then consume the media payload
+- [x] Add view-once photo and video selection/sending controls
+- [x] Allow recipients to open view-once photos and videos once, then consume the media payload
+- [x] Remove consumed media payloads and clear room media on teardown
+- [x] Disclose that Android blocks OS capture while browser capture cannot be guaranteed
+- [x] Add unit tests for media validation, one-play, one-view, and room teardown
+- [ ] Visually verify voice, photo, and video controls on desktop and mobile layouts
 
 ## Source archive
 

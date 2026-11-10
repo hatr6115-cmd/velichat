@@ -104,10 +104,48 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
 
   const getMedia = useCallback(async (kind: CallKind) => {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("Media devices are unavailable");
-    return navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      ...(kind === "video" ? { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } } } : {}),
+    const stream = await navigator.mediaDevices.getUserMedia({
+      // Ideal constraints give capable devices a clearer 720p/30fps picture,
+      // while still letting the browser adapt down on older phones or weak links.
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: { ideal: 48_000 },
+        channelCount: { ideal: 2 },
+      },
+      ...(kind === "video"
+        ? {
+            video: {
+              facingMode: { ideal: "user" },
+              width: { ideal: 1280, max: 1920 },
+              height: { ideal: 720, max: 1080 },
+              frameRate: { ideal: 30, max: 30 },
+              aspectRatio: { ideal: 16 / 9 },
+            },
+          }
+        : {}),
     });
+    stream.getAudioTracks().forEach((track) => { track.contentHint = "speech"; });
+    stream.getVideoTracks().forEach((track) => { track.contentHint = "motion"; });
+    return stream;
+  }, []);
+
+  const configureSenderQuality = useCallback(async (sender: RTCRtpSender, kind: string) => {
+    try {
+      const parameters = sender.getParameters();
+      const encodings = parameters.encodings?.length ? parameters.encodings : [{}];
+      parameters.encodings = encodings.map((encoding) => ({
+        ...encoding,
+        maxBitrate: kind === "video" ? 2_500_000 : 128_000,
+        ...(kind === "video" ? { maxFramerate: 30 } : {}),
+        priority: "high" as RTCPriorityType,
+      }));
+      if (kind === "video") parameters.degradationPreference = "balanced";
+      await sender.setParameters(parameters);
+    } catch {
+      // Older WebViews may not support sender tuning; negotiated WebRTC defaults still work.
+    }
   }, []);
 
   const attachLocalTracks = useCallback(async (pc: RTCPeerConnection, stream: MediaStream) => {
@@ -115,13 +153,16 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       const existingSender = pc.getTransceivers()
         .find((transceiver) => transceiver.receiver.track?.kind === track.kind && !transceiver.sender.track)
         ?.sender;
+      let sender: RTCRtpSender | undefined;
       if (existingSender) {
         await existingSender.replaceTrack(track);
-      } else if (!pc.getSenders().some((sender) => sender.track?.id === track.id)) {
-        pc.addTrack(track, stream);
+        sender = existingSender;
+      } else if (!pc.getSenders().some((item) => item.track?.id === track.id)) {
+        sender = pc.addTrack(track, stream);
       }
+      if (sender) await configureSenderQuality(sender, track.kind);
     }
-  }, []);
+  }, [configureSenderQuality]);
 
   const createPeer = useCallback(async (remoteId: string, offerer: boolean) => {
     if (!session || !localRef.current || peersRef.current.has(remoteId) || creatingRef.current.has(remoteId)) return;

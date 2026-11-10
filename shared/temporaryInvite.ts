@@ -6,7 +6,8 @@ const temporaryInviteSchema = z.object({
   roomId: z.string().min(8).max(64),
   inviteToken: z.string().min(16).max(96),
   hostAlias: z.string().min(2).max(32),
-  expiresAt: z.number().int().positive(),
+  // Optional for backward compatibility with links created before rooms became persistent.
+  expiresAt: z.number().int().positive().optional(),
 });
 
 export type TemporaryInvite = z.infer<typeof temporaryInviteSchema>;
@@ -18,11 +19,9 @@ export function encodeTemporaryInvite(invite: TemporaryInvite) {
 export function parseTemporaryInvite(raw: string): TemporaryInvite {
   try {
     const decoded = raw.startsWith("{") ? raw : decodeURIComponent(raw);
-    const invite = temporaryInviteSchema.parse(JSON.parse(decoded));
-    if (invite.expiresAt <= Date.now()) throw new Error("expired");
-    return invite;
+    return temporaryInviteSchema.parse(JSON.parse(decoded));
   } catch {
-    throw new Error("This temporary chat invite is invalid or expired.");
+    throw new Error("This room invitation is invalid.");
   }
 }
 
