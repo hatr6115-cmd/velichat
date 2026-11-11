@@ -187,10 +187,9 @@ export default function Home() {
   const acknowledge = trpc.temporary.acknowledge.useMutation();
   const markRead = trpc.temporary.markRead.useMutation();
   const leaveRoom = trpc.temporary.leave.useMutation();
-  const startCallMutation = trpc.temporary.startCall.useMutation();
-  const joinCallMutation = trpc.temporary.joinCall.useMutation();
-  const endCallMutation = trpc.temporary.endCall.useMutation();
-  const sendSignalMutation = trpc.temporary.sendSignal.useMutation();
+
+  // The call mutations live inside useMeshCall; declaring them again here left
+  // unused duplicates that could drift from the hook's actual request shape.
 
   const typingTimerRef = useRef<number | undefined>(undefined);
   const recordingTimerRef = useRef<number | undefined>(undefined);
@@ -387,9 +386,9 @@ export default function Home() {
 
   const {
     isInCall, isInitiator, callKind, callStatus, localStream, remoteStreams, callError,
-    isMicMuted, isCamOff, start: startCall, accept: acceptCall, reject: rejectCall,
+    isMicMuted, isCamOff, isStarting: isCallStarting, start: startCall, accept: acceptCall, reject: rejectCall,
     hangup: hangupCall, toggleMic, toggleCam,
-  } = useMeshCall(session ? { roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId } : null, room);
+  } = useMeshCall(session, room);
 
   // Wake a sleeping Render instance when the app opens, then keep it warm while open.
   useEffect(() => {
@@ -1008,20 +1007,22 @@ export default function Home() {
               <>
                 <button
                   type="button"
-                  onClick={() => startCall("audio")}
-                  disabled={!isOnline || isInCall || Boolean(room?.call)}
-                  title="Start voice call"
+                  onClick={() => void startCall("audio")}
+                  disabled={!isOnline || isInCall || isCallStarting || Boolean(room?.call)}
                   aria-label="Start voice call"
+                  aria-busy={isCallStarting}
+                  title={isCallStarting ? "Starting call…" : "Start voice call"}
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-35 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
                 >
                   <Phone className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
-                  onClick={() => startCall("video")}
-                  disabled={!isOnline || isInCall || Boolean(room?.call)}
-                  title="Start video call"
+                  onClick={() => void startCall("video")}
+                  disabled={!isOnline || isInCall || isCallStarting || Boolean(room?.call)}
                   aria-label="Start video call"
+                  aria-busy={isCallStarting}
+                  title={isCallStarting ? "Starting call…" : "Start video call"}
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-35 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
                 >
                   <Video className="h-4 w-4" />
@@ -1029,6 +1030,7 @@ export default function Home() {
               </>
             )}
 
+            {/* QR Invite */}
             <button
               type="button"
               onClick={() => setIsQrModalOpen(true)}
