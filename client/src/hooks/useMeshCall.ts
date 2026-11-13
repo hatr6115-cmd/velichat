@@ -48,8 +48,14 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const pendingIceRef = useRef(new Map<string, RTCIceCandidateInit[]>());
   const creatingRef = useRef(new Set<string>());
   const processedSignalsRef = useRef(new Set<string>());
+  const signalingQueueRef = useRef<Promise<void>>(Promise.resolve());
   const acceptedRef = useRef(false);
+  const hadActiveCallRef = useRef(false);
+  const endedCallKeyRef = useRef<string | null>(null);
+  const roomCallPresentRef = useRef(Boolean(room?.call));
   const missingCallTimerRef = useRef<number | undefined>(undefined);
+  const sessionKeyRef = useRef(session ? `${session.roomId}:${session.memberId}` : null);
+  roomCallPresentRef.current = Boolean(room?.call);
 
   const send = useCallback(async (receiverId: string, type: "offer" | "answer" | "ice" | "end", payload: unknown) => {
     if (!session) return;
@@ -82,8 +88,9 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   }, [removeRemote]);
 
   const cleanup = useCallback(() => {
-    if (missingCallTimerRef.current) window.clearTimeout(missingCallTimerRef.current);
+    if (missingCallTimerRef.current !== undefined) window.clearTimeout(missingCallTimerRef.current);
     missingCallTimerRef.current = undefined;
+    hadActiveCallRef.current = false;
     peersRef.current.forEach((_, memberId) => closePeer(memberId));
     peersRef.current.clear();
     pendingIceRef.current.clear();
@@ -101,6 +108,16 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     setCallError(null);
     setCallStatus("ended");
   }, [closePeer]);
+
+  useEffect(() => {
+    const nextSessionKey = session ? `${session.roomId}:${session.memberId}` : null;
+    if (sessionKeyRef.current !== nextSessionKey) {
+      sessionKeyRef.current = nextSessionKey;
+      if (localRef.current || peersRef.current.size > 0 || isInCall) cleanup();
+    }
+  }, [cleanup, isInCall, session]);
+
+  useEffect(() => () => cleanup(), [cleanup]);
 
   const getMedia = useCallback(async (kind: CallKind) => {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("Media devices are unavailable");
@@ -169,14 +186,9 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     creatingRef.current.add(remoteId);
     const pc = new RTCPeerConnection(rtcConfig);
     peersRef.current.set(remoteId, pc);
-    // The offerer adds tracks before creating its offer. The answerer must
-    // wait until setRemoteDescription(offer) so the remote transceivers are
-    // matched correctly; adding tracks too early can leave the answer without
-    // usable media sections and both clients stuck on "Connecting stream…".
-    if (offerer) {
-      await attachLocalTracks(pc, localRef.current);
-    }
 
+    // Install handlers before adding tracks or starting ICE gathering so early
+    // candidates and remote tracks cannot be missed.
     pc.ontrack = (event) => {
       const stream = event.streams[0] || new MediaStream([event.track]);
       setRemoteStreams((items) => {
@@ -190,17 +202,17 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       setCallStatus("connected");
     };
     pc.onicecandidate = (event) => {
-      if (event.candidate) void send(remoteId, "ice", event.candidate.toJSON());
-    };
-    pc.onicecandidateerror = () => {
-      // Keep trying direct/STUN candidates, but surface the failure if no path succeeds.
-      if (pc.iceConnectionState === "failed") {
-        setCallError("The network blocked the call. Please switch network or try again.");
+      if (event.candidate) {
+        void send(remoteId, "ice", event.candidate.toJSON()).catch((error) => {
+          console.error("Failed to send WebRTC ICE candidate:", error);
+          setCallError("Call signaling was interrupted. Check your connection and try again.");
+        });
       }
     };
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
         setCallStatus("connected");
+        setCallError(null);
       }
       if (pc.iceConnectionState === "failed") {
         setCallError("The call could not establish a network connection. Please try again.");
@@ -208,19 +220,32 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       }
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected") setCallStatus("connected");
-      if (pc.connectionState === "failed" || pc.connectionState === "closed") closePeer(remoteId);
+      if (pc.connectionState === "connected") {
+        setCallStatus("connected");
+        setCallError(null);
+      }
+      if (pc.connectionState === "failed") {
+        setCallError("The call connection failed. Check your network and try again.");
+        closePeer(remoteId);
+      } else if (pc.connectionState === "closed") {
+        closePeer(remoteId);
+      }
     };
 
     try {
       if (offerer) {
-        const offer = await pc.createOffer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: true,
-        });
+        const stream = localRef.current;
+        if (!stream) throw new Error("Microphone or camera access is no longer available.");
+        // The caller offers its tracks; the answerer adds local tracks only
+        // after applying the offer so the media sections match correctly.
+        await attachLocalTracks(pc, stream);
+        const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await send(remoteId, "offer", offer);
       }
+    } catch (error) {
+      closePeer(remoteId);
+      throw error;
     } finally {
       creatingRef.current.delete(remoteId);
     }
@@ -285,24 +310,45 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   useEffect(() => {
     if (!session || !room) return;
     if (room.call) {
-      if (room.call.kind !== callKind && !isInCall) setCallKind(room.call.kind);
-      if (room.call.initiatorId !== session.memberId && !isInCall) {
-        setCallStatus("ringing");
-        setIsInCall(true);
+      const callKey = `${room.call.initiatorId}:${room.call.startedAt}`;
+      if (missingCallTimerRef.current !== undefined) {
+        window.clearTimeout(missingCallTimerRef.current);
+        missingCallTimerRef.current = undefined;
       }
-      if (isInCall && localRef.current) {
-        for (const remoteId of room.call.participants.filter((id) => id !== session.memberId)) {
-          // The actual caller owns offer creation. The receiver creates its
-          // peer only after receiving that offer, which prevents offer glare
-          // and ensures the caller's audio/video tracks are in the offer.
-          if (room.call.initiatorId === session.memberId) void createPeer(remoteId, true);
+      if (endedCallKeyRef.current === callKey) {
+        hadActiveCallRef.current = false;
+      } else {
+        endedCallKeyRef.current = null;
+        hadActiveCallRef.current = true;
+        if (room.call.kind !== callKind && !isInCall) setCallKind(room.call.kind);
+        if (room.call.initiatorId !== session.memberId && !isInCall) {
+          setCallStatus("ringing");
+          setIsInCall(true);
+        }
+        if (isInCall && localRef.current) {
+          for (const remoteId of room.call.participants.filter((id) => id !== session.memberId)) {
+            // The actual caller owns offer creation. The receiver creates its
+            // peer only after receiving that offer, which prevents offer glare
+            // and ensures the caller's audio/video tracks are in the offer.
+            if (room.call.initiatorId === session.memberId) {
+              void createPeer(remoteId, true).catch((error) => {
+                console.error("Failed to create the WebRTC connection:", error);
+                setCallError(error instanceof Error ? error.message : "Could not start the media connection.");
+              });
+            }
+          }
         }
       }
-    } else if (isInCall && !missingCallTimerRef.current) {
-      missingCallTimerRef.current = window.setTimeout(() => {
-        missingCallTimerRef.current = undefined;
-        if (!room?.call) cleanup();
-      }, 4000);
+    } else {
+      endedCallKeyRef.current = null;
+      if (isInCall && hadActiveCallRef.current && missingCallTimerRef.current === undefined) {
+        // Only start teardown grace after an active server call was observed;
+        // the initial create/start request is not a missing-call condition.
+        missingCallTimerRef.current = window.setTimeout(() => {
+          missingCallTimerRef.current = undefined;
+          if (!roomCallPresentRef.current) cleanup();
+        }, 4000);
+      }
     }
 
     const processSignals = async () => {
@@ -311,19 +357,25 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
         if (signal.receiverId !== "all" && signal.receiverId !== session.memberId) continue;
         const payload = JSON.parse(signal.payload);
         if (signal.type === "end") {
-          processedSignalsRef.current.add(signal.id);
+          if (room.call) endedCallKeyRef.current = `${room.call.initiatorId}:${room.call.startedAt}`;
           cleanup();
+          // cleanup resets signal bookkeeping for the next call; retain this
+          // end marker until the server removes the active call snapshot.
+          processedSignalsRef.current.add(signal.id);
           continue;
         }
         // The initiator can send an offer while the callee is still deciding
         // whether to grant microphone/camera access. Keep the signal queued by
         // leaving it unprocessed until local media exists.
         if (!localRef.current) continue;
-        processedSignalsRef.current.add(signal.id);
         if (signal.type === "offer") {
           await createPeer(signal.senderId, false);
           const pc = peersRef.current.get(signal.senderId);
-          if (!pc || pc.remoteDescription) continue;
+          if (!pc) continue;
+          if (pc.remoteDescription) {
+            processedSignalsRef.current.add(signal.id);
+            continue;
+          }
           await pc.setRemoteDescription(new RTCSessionDescription(payload));
           const stream = localRef.current;
           if (stream) await attachLocalTracks(pc, stream);
@@ -333,7 +385,8 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
           await send(signal.senderId, "answer", answer);
         } else if (signal.type === "answer") {
           const pc = peersRef.current.get(signal.senderId);
-          if (pc && !pc.remoteDescription) {
+          if (!pc) continue;
+          if (!pc.remoteDescription) {
             await pc.setRemoteDescription(new RTCSessionDescription(payload));
             await flushIce(signal.senderId, pc);
           }
@@ -342,6 +395,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
           if (pc?.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(payload)).catch(() => undefined);
           else pendingIceRef.current.set(signal.senderId, [...(pendingIceRef.current.get(signal.senderId) || []), payload]);
         }
+        processedSignalsRef.current.add(signal.id);
       }
 
       // The server also anchors the latest offer and answer on the call
@@ -371,7 +425,15 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
         }
       }
     };
-    void processSignals();
+    // SSE updates can arrive while an offer/answer is still being applied. Queue
+    // snapshots so two effect runs never call setRemoteDescription concurrently.
+    signalingQueueRef.current = signalingQueueRef.current
+      .catch(() => undefined)
+      .then(processSignals)
+      .catch((error) => {
+        console.error("Failed to process WebRTC signaling:", error);
+        setCallError(error instanceof Error ? error.message : "Call setup failed. Please try again.");
+      });
   }, [attachLocalTracks, callKind, cleanup, createPeer, flushIce, isInCall, room, send, session]);
 
   return {

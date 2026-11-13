@@ -23,6 +23,16 @@ interface CallModalProps {
 function RemoteTile({ item, kind }: { item: RemoteStream; kind: "audio" | "video" }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  const enableAudio = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      void Promise.resolve(audio.play()).then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true));
+    } catch {
+      setAudioBlocked(true);
+    }
+  };
   useEffect(() => {
     if (videoRef.current && kind === "video") {
       videoRef.current.srcObject = item.stream;
@@ -30,7 +40,11 @@ function RemoteTile({ item, kind }: { item: RemoteStream; kind: "audio" | "video
     }
     if (audioRef.current) {
       audioRef.current.srcObject = item.stream;
-      void audioRef.current.play().catch(() => undefined);
+      try {
+        void Promise.resolve(audioRef.current.play()).then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true));
+      } catch {
+        setAudioBlocked(true);
+      }
     }
   }, [item.stream, kind]);
   return (
@@ -40,6 +54,15 @@ function RemoteTile({ item, kind }: { item: RemoteStream; kind: "audio" | "video
         <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
       ) : (
         <div className="flex h-full min-h-40 items-center justify-center text-3xl font-semibold text-white">{item.memberId.slice(0, 2).toUpperCase()}</div>
+      )}
+      {audioBlocked && (
+        <button
+          type="button"
+          onClick={enableAudio}
+          className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-blue-600 px-4 py-2 text-xs font-medium text-white shadow-lg"
+        >
+          Tap to enable audio
+        </button>
       )}
     </div>
   );

@@ -173,8 +173,6 @@ export default function Home() {
   const [selectedDocument, setSelectedDocument] = useState<{ file: File; dataUrl: string } | null>(null);
   const [activePhoto, setActivePhoto] = useState<string | null>(null);
   const [activeVideo, setActiveVideo] = useState<string | null>(null);
-  const [photoCountdown, setPhotoCountdown] = useState(10);
-  const [videoCountdown, setVideoCountdown] = useState(30);
   const [consumedMediaIds, setConsumedMediaIds] = useState<Set<string>>(() => new Set());
 
   // tRPC mutations
@@ -194,8 +192,6 @@ export default function Home() {
 
   const typingTimerRef = useRef<number | undefined>(undefined);
   const recordingTimerRef = useRef<number | undefined>(undefined);
-  const photoTimerRef = useRef<number | undefined>(undefined);
-  const videoTimerRef = useRef<number | undefined>(undefined);
   const messageNodesRef = useRef(new Map<string, HTMLElement>());
   const messageListRef = useRef<HTMLDivElement>(null);
   const readObserverRef = useRef<IntersectionObserver | null>(null);
@@ -205,14 +201,10 @@ export default function Home() {
   const pendingLeaveInFlightRef = useRef(false);
 
   function closeActivePhoto() {
-    if (photoTimerRef.current !== undefined) window.clearInterval(photoTimerRef.current);
-    photoTimerRef.current = undefined;
     setActivePhoto(null);
   }
 
   function closeActiveVideo() {
-    if (videoTimerRef.current !== undefined) window.clearInterval(videoTimerRef.current);
-    videoTimerRef.current = undefined;
     setActiveVideo(null);
   }
 
@@ -228,8 +220,6 @@ export default function Home() {
     document.addEventListener("visibilitychange", hideProtectedMedia);
     return () => {
       document.removeEventListener("visibilitychange", hideProtectedMedia);
-      if (photoTimerRef.current !== undefined) window.clearInterval(photoTimerRef.current);
-      if (videoTimerRef.current !== undefined) window.clearInterval(videoTimerRef.current);
     };
   }, []);
 
@@ -882,36 +872,20 @@ export default function Home() {
     }
   }
 
-  async function openViewOncePhoto(item: { id: string; dataUrl?: string }) {
+  function openViewOncePhoto(item: { id: string; dataUrl?: string }) {
     if (!item.dataUrl) return;
     closeActivePhoto();
     closeActiveVideo();
     setActivePhoto(item.dataUrl);
-    setPhotoCountdown(10);
     void consumeMediaOnce(item.id);
-
-    let secondsLeft = 10;
-    photoTimerRef.current = window.setInterval(() => {
-      secondsLeft -= 1;
-      setPhotoCountdown(secondsLeft);
-      if (secondsLeft <= 0) closeActivePhoto();
-    }, 1000);
   }
 
-  async function openViewOnceVideo(item: { id: string; dataUrl?: string }) {
+  function openViewOnceVideo(item: { id: string; dataUrl?: string }) {
     if (!item.dataUrl) return;
     closeActivePhoto();
     closeActiveVideo();
     setActiveVideo(item.dataUrl);
-    setVideoCountdown(30);
     void consumeMediaOnce(item.id);
-
-    let secondsLeft = 30;
-    videoTimerRef.current = window.setInterval(() => {
-      secondsLeft -= 1;
-      setVideoCountdown(secondsLeft);
-      if (secondsLeft <= 0) closeActiveVideo();
-    }, 1000);
   }
 
   async function endRoom() {
@@ -1350,13 +1324,6 @@ export default function Home() {
 
         {/* Composer */}
         <footer className="shrink-0 border-t border-zinc-200 bg-white p-2.5 pb-[calc(0.65rem+env(safe-area-inset-bottom))] dark:border-zinc-800 dark:bg-zinc-900 sm:p-3">
-          <p
-            className="mx-auto mb-2 flex max-w-2xl items-center gap-1.5 px-1 text-[10px] leading-tight text-zinc-500 dark:text-zinc-400"
-            title="The Android app blocks system screenshots and recording. Browser capture cannot be reliably prevented, and another device can always record the screen."
-          >
-            <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-            <span>View-once media expires · Android blocks OS capture; browsers can’t guarantee it.</span>
-          </p>
           {isRecording ? (
             <div className="flex items-center justify-between gap-2 p-2 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 text-xs">
               <span className="flex items-center gap-1.5 font-medium pl-1 truncate">
@@ -1509,7 +1476,7 @@ export default function Home() {
           >
             <div className="flex items-center justify-between w-full max-w-md mb-3 text-white text-xs font-medium">
               <span className="flex items-center gap-1.5">
-                <Eye className="w-4 h-4 text-blue-400" /> Disappears in {photoCountdown}s
+                <Eye className="w-4 h-4 text-blue-400" /> View-once photo
               </span>
               <button
                 onClick={closeActivePhoto}
@@ -1540,7 +1507,7 @@ export default function Home() {
               onClick={(e) => e.stopPropagation()}
             >
               <span className="flex items-center gap-1.5">
-                <Video className="w-4 h-4 text-blue-400" /> Disappears in {videoCountdown}s
+                <Video className="w-4 h-4 text-blue-400" /> View-once video
               </span>
               <button
                 onClick={closeActiveVideo}
