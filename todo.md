@@ -79,6 +79,7 @@
 - [x] Allow recipients to play voice notes once, then consume the media payload
 - [x] Add view-once photo and video selection/sending controls
 - [x] Allow recipients to open view-once photos and videos once, then consume the media payload
+- [x] Remove elapsed-time view-once countdowns; close media when dismissed, backgrounded, or playback ends
 - [x] Remove consumed media payloads and clear room media on teardown
 - [x] Disclose that Android blocks OS capture while browser capture cannot be guaranteed
 - [x] Add unit tests for media validation, one-play, one-view, and room teardown

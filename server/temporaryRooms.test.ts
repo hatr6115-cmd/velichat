@@ -119,15 +119,41 @@ describe("temporary rooms", () => {
 
       const joined = joinTemporaryCall(host.roomId, host.inviteToken, guest.currentMemberId);
       expect(joined.call?.participants).toEqual([host.currentMemberId, guest.currentMemberId]);
+      const offer = JSON.stringify({ type: "offer", sdp: "ephemeral-test-offer" });
       sendTemporaryCallSignal(
         host.roomId,
         host.inviteToken,
         host.currentMemberId,
         guest.currentMemberId,
         "offer",
-        JSON.stringify({ type: "offer", sdp: "ephemeral-test-offer" }),
+        offer,
       );
-      expect(getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId).signals.some((signal) => signal.type === "offer")).toBe(true);
+      const incomingOffer = getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId);
+      expect(incomingOffer.signals.some((signal) => signal.type === "offer" && signal.payload === offer)).toBe(true);
+      expect(incomingOffer.call?.offer).toBe(offer);
+
+      sendTemporaryCallSignal(
+        host.roomId,
+        host.inviteToken,
+        host.currentMemberId,
+        guest.currentMemberId,
+        "ice",
+        JSON.stringify({ candidate: "candidate:test" }),
+      );
+      expect(getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId).signals.some((signal) => signal.type === "ice")).toBe(true);
+
+      const answer = JSON.stringify({ type: "answer", sdp: "ephemeral-test-answer" });
+      sendTemporaryCallSignal(
+        host.roomId,
+        host.inviteToken,
+        guest.currentMemberId,
+        host.currentMemberId,
+        "answer",
+        answer,
+      );
+      const incomingAnswer = getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId);
+      expect(incomingAnswer.signals.some((signal) => signal.type === "answer" && signal.payload === answer)).toBe(true);
+      expect(incomingAnswer.call?.answer).toBe(answer);
 
       endTemporaryCall(host.roomId, host.inviteToken, guest.currentMemberId);
       expect(getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).call).toBeUndefined();
