@@ -4,13 +4,20 @@
 
 - Removed the automatic room lifetime and expiry-extension controls. New invites omit expiry timestamps; legacy invite payloads with past timestamps remain parseable.
 - The browser saves the active room credentials locally, restores them after a page refresh, and retains them through temporary network/query failures while SSE and fallback polling reconnect. An explicit offline logout is queued locally and retried on reconnect/app start.
+- Rooms accept up to 50 participants (one host plus 49 guests) through the same reusable invite URL/QR. The room UI identifies group chats and keeps the invite available while more people join. Voice/video calling remains two-party; group calls are not implemented.
 - Audio/video calling, responsive chat controls, typing presence, copy/paste, view-once media, and native Android `FLAG_SECURE` protections are implemented. The call hook no longer starts its missing-call teardown before the server confirms an active call; signaling snapshots are serialized, negotiation errors are surfaced, and a tap-to-enable-audio fallback is available.
 - View-once photos no longer auto-close on a countdown; they remain open until dismissed or the app is backgrounded. Videos close when playback ends or the viewer dismisses them. The composer capture/expiry notice was removed.
-- `corepack pnpm check` passed; `corepack pnpm test` passed (14 tests); `corepack pnpm build` passed; `git diff --check` passed. The production build reports a large JavaScript chunk warning.
-- The live preview smoke test returned HTTP 200 for `/` and `/api/health`.
+- Ordinary voice notes now remain replayable for senders and recipients. Voice-note view-once is a separate, opt-in setting; recipients can finish one playback, while the sender retains their own copy.
+- Message and media deletion is owner-authorized with a per-participant capability token. The user confirmed deletion should remove the item for everyone in the room.
+- Chat backgrounds (default, sky, rose, sage, sand, and slate) persist per room and are separate from the global light/dark mode. The mobile composer keeps text controls at least 16px to prevent iOS Safari focus zoom, and the message feed has a constrained scroll area.
+- Call setup fetches ICE server configuration from the server, accepts `TURN_URLS`, `TURN_USERNAME`, and `TURN_CREDENTIAL` deployment settings, guards offer/answer signaling, and surfaces a connection timeout. A server-side fallback relay remains configured; real device/inter-network behavior still needs testing.
+- Android `FLAG_SECURE` remains enabled. Browsers cannot reliably detect OS-level or phone screenshots. The page best-effort reports some delivered screenshot-keyboard events (Print Screen and common OS shortcuts) to the room, with copy that explicitly says capture is unconfirmed; missed key events, iOS screenshots, browser tools, and external cameras are not detectable.
+- The chat feed merges messages and media by send time. Server timestamps are made strictly increasing across both item types so same-millisecond sends retain their actual order; adding any new chat item scrolls the feed to the bottom.
+- `corepack pnpm check` passed; `corepack pnpm test` passed (24 tests); `corepack pnpm build` passed; `git diff --check` passed. The production build reports a large JavaScript chunk warning.
+- The live preview returned HTTP 200 for `/`, `/api/health`, and the call ICE configuration query. A local tRPC smoke test created/joined a room and confirmed `reportScreenshotShortcut` returns a room-visible notice.
 - Added `scripts/keep-render-awake.mjs` and a GitHub Actions workflow scheduled every 5 minutes, with retries and a health check. The script was smoke-tested against the local preview; an actual scheduled GitHub Actions run against Render was not run here. The previous 14-minute workflow's recent run history showed multi-hour gaps, so GitHub scheduling is best-effort, not a no-cold-start guarantee. The updated schedule takes effect from the default branch after merge and may also be delayed by GitHub.
 - The server already self-pings its Render URL while awake, and the client pings on page load; the scheduled workflow is the external wake-up path.
-- No Android Gradle/device build or current browser visual/inter-device call test was run.
+- No Android Gradle/device build or browser visual/keyboard-shortcut interaction test was run. Real-device/inter-network call behavior also remains unverified.
 - Room state and transcripts remain in server memory, not the database. A server process restart still loses active rooms; refresh/network recovery works only while that process retains the room.
 
 ## Historical visual notes (before room-timer removal)

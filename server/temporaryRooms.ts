@@ -31,6 +31,10 @@ export type TemporaryAlias = string;
 type Participant = {
   id: string;
   alias: TemporaryAlias;
+  // A per-participant capability used only for deleting that participant's
+  // content. It is returned only to that participant at create/join time and
+  // is never included in room snapshots or invite links.
+  memberToken: string;
 };
 
 export type TemporaryMessage = {
@@ -48,6 +52,9 @@ type TemporaryMedia = {
   memberId: string;
   alias: TemporaryAlias;
   kind: "voice" | "photo" | "video" | "document";
+  // Voice notes are replayable by default. Only an explicit opt-in makes a
+  // voice note consumable once; photos and videos remain view-once by kind.
+  viewOnce?: boolean;
   fileName?: string;
   mimeType?: string;
   dataUrl?: string; // made optional so we can delete it when everyone consumed
@@ -57,6 +64,13 @@ type TemporaryMedia = {
 
 export type TemporaryMediaSnapshot = Omit<TemporaryMedia, "dataUrl"> & { dataUrl?: string };
 
+export type ScreenshotShortcutNotice = {
+  id: string;
+  memberId: string;
+  alias: TemporaryAlias;
+  sentAt: number;
+};
+
 type Room = {
   id: string;
   inviteToken: string;
@@ -64,6 +78,7 @@ type Room = {
   guests: Participant[];
   messages: TemporaryMessage[];
   media: TemporaryMedia[];
+  screenshotShortcutNotices: ScreenshotShortcutNotice[];
   typing: { memberId: string; expiresAt: number }[];
   call?: ActiveCall;
   signals: CallSignal[];
@@ -81,9 +96,49 @@ export type RoomSnapshot = {
   typingAliases: string[];
   messages: TemporaryMessage[];
   media: TemporaryMediaSnapshot[];
+  screenshotShortcutNotices: ScreenshotShortcutNotice[];
   call?: ActiveCall;
   signals: CallSignal[];
 };
+
+export type TemporaryCallIceServer = {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+};
+
+const DEFAULT_TURN_SERVER: TemporaryCallIceServer = {
+  urls: [
+    "turn:staticauth.openrelay.metered.ca:80",
+    "turn:staticauth.openrelay.metered.ca:80?transport=tcp",
+    "turn:staticauth.openrelay.metered.ca:443",
+    "turn:staticauth.openrelay.metered.ca:443?transport=tcp",
+    "turns:staticauth.openrelay.metered.ca:443?transport=tcp",
+  ],
+  username: "openrelayproject",
+  credential: "openrelayprojectsecret",
+};
+
+/**
+ * Allow deployments to use their own TURN relay without baking credentials
+ * into the client bundle. TURN_URLS accepts a comma-separated list.
+ */
+export function getTemporaryCallIceServers(): TemporaryCallIceServer[] {
+  const configuredUrls = (process.env.TURN_URLS || "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter((url) => url.startsWith("turn:") || url.startsWith("turns:"));
+  const username = process.env.TURN_USERNAME?.trim();
+  const credential = process.env.TURN_CREDENTIAL;
+  const configuredTurn = configuredUrls.length && username && credential
+    ? [{ urls: configuredUrls, username, credential }]
+    : [DEFAULT_TURN_SERVER];
+
+  return [
+    { urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
+    ...configuredTurn,
+  ];
+}
 
 const rooms = new Map<string, Room>();
 
@@ -184,6 +239,7 @@ function requireRoom(roomId: string, inviteToken: string) {
 function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
   const now = Date.now();
   room.typing = room.typing.filter(t => t.expiresAt > now);
+  room.screenshotShortcutNotices = room.screenshotShortcutNotices.filter((notice) => now - notice.sentAt < 60_000);
   
   const current = room.host.id === currentMemberId ? room.host : room.guests.find(g => g.id === currentMemberId);
   if (!current) throw new Error("You are not a participant in this room.");
@@ -208,11 +264,8 @@ function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
     typingAlias: typingAliases[0],
     typingAliases: Array.from(new Set(typingAliases)),
     messages: room.messages.map(m => ({ ...m, deliveredTo: [...m.deliveredTo], readBy: [...m.readBy] })),
-    media: room.media.map((item) => ({
-      ...item,
-      consumedBy: [...item.consumedBy],
-      dataUrl: item.consumedBy.includes(currentMemberId) ? undefined : item.dataUrl,
-    })),
+    media: room.media.map((item) => ({ ...item, consumedBy: [...item.consumedBy], dataUrl: item.consumedBy.includes(currentMemberId) ? undefined : item.dataUrl })),
+    screenshotShortcutNotices: room.screenshotShortcutNotices.map((notice) => ({ ...notice })),
     call: room.call
       ? (room.call.targetId && room.call.targetId !== currentMemberId && room.call.initiatorId !== currentMemberId)
         ? undefined
@@ -230,20 +283,23 @@ export function createTemporaryRoom(aliasInput: string, clientIp = "default") {
     throw new Error("Too many room creation requests. Please wait a minute.");
   }
   const alias = validateAlias(aliasInput);
+  const host: Participant = { id: nanoid(12), alias, memberToken: nanoid(32) };
   const room: Room = {
     id: nanoid(16),
     inviteToken: nanoid(32),
-    host: { id: nanoid(12), alias },
+    host,
     guests: [],
     messages: [],
     media: [],
+    screenshotShortcutNotices: [],
     typing: [],
     signals: [],
   };
   rooms.set(room.id, room);
   return {
-    ...snapshot(room, room.host.id),
+    ...snapshot(room, host.id),
     inviteToken: room.inviteToken,
+    memberToken: host.memberToken,
   };
 }
 
@@ -253,16 +309,47 @@ export function joinTemporaryRoom(roomId: string, inviteToken: string, aliasInpu
   if (room.guests.length >= 49) throw new Error("This temporary room has reached the maximum of 50 participants.");
   
   const alias = validateAlias(aliasInput);
-  const newGuest = { id: nanoid(12), alias };
+  const newGuest: Participant = { id: nanoid(12), alias, memberToken: nanoid(32) };
   room.guests.push(newGuest);
   
   const snap = snapshot(room, newGuest.id);
   notifyRoomSubscribers(roomId);
-  return snap;
+  return { ...snap, memberToken: newGuest.memberToken };
 }
 
 export function getTemporaryRoom(roomId: string, inviteToken: string, memberId: string) {
   return snapshot(requireRoom(roomId, inviteToken), memberId);
+}
+
+export function reportTemporaryScreenshotShortcut(
+  roomId: string,
+  inviteToken: string,
+  memberId: string,
+  memberToken: string,
+) {
+  const room = requireRoom(roomId, inviteToken);
+  const member = [room.host, ...room.guests].find((participant) => participant.memberToken === memberToken);
+  if (!member || member.id !== memberId) {
+    throw new Error("You do not have permission to report an event for this room participant.");
+  }
+
+  if (!checkRateLimit(`screenshot-shortcut:${roomId}:${memberId}`, 1, 5_000)) {
+    return snapshot(room, memberId);
+  }
+
+  const sentAt = Date.now();
+  room.screenshotShortcutNotices = room.screenshotShortcutNotices.filter((notice) => sentAt - notice.sentAt < 60_000);
+  room.screenshotShortcutNotices.push({
+    id: nanoid(12),
+    memberId,
+    alias: member.alias,
+    sentAt,
+  });
+  if (room.screenshotShortcutNotices.length > 50) room.screenshotShortcutNotices.shift();
+
+  const snap = snapshot(room, memberId);
+  notifyRoomSubscribers(roomId);
+  return snap;
 }
 
 export function setTemporaryTyping(roomId: string, inviteToken: string, memberId: string, isTyping: boolean) {
@@ -334,7 +421,7 @@ export function sendTemporaryMessage(roomId: string, inviteToken: string, member
     memberId, 
     alias: member.alias, 
     body, 
-    sentAt: Date.now(),
+    sentAt: nextContentTimestamp(room),
     deliveredTo: [],
     readBy: []
   });
@@ -347,6 +434,12 @@ function getParticipant(room: Room, memberId: string) {
   const member = room.host.id === memberId ? room.host : room.guests.find(g => g.id === memberId);
   if (!member) throw new Error("You are not a participant in this room.");
   return member;
+}
+
+function nextContentTimestamp(room: Room) {
+  const latestMessage = room.messages[room.messages.length - 1]?.sentAt ?? 0;
+  const latestMedia = room.media[room.media.length - 1]?.sentAt ?? 0;
+  return Math.max(Date.now(), Math.max(latestMessage, latestMedia) + 1);
 }
 
 function validateMedia(kind: "voice" | "photo" | "video" | "document", dataUrlInput: string) {
@@ -423,7 +516,16 @@ function validateMedia(kind: "voice" | "photo" | "video" | "document", dataUrlIn
   return `data:${rawMime};base64,${base64Raw}`;
 }
 
-export function sendTemporaryMedia(roomId: string, inviteToken: string, memberId: string, kind: "voice" | "photo" | "video" | "document", dataUrlInput: string, fileName?: string, mimeType?: string) {
+export function sendTemporaryMedia(
+  roomId: string,
+  inviteToken: string,
+  memberId: string,
+  kind: "voice" | "photo" | "video" | "document",
+  dataUrlInput: string,
+  fileName?: string,
+  mimeType?: string,
+  viewOnce = false,
+) {
   const room = requireRoom(roomId, inviteToken);
   const member = getParticipant(room, memberId);
   const dataUrl = validateMedia(kind, dataUrlInput);
@@ -433,9 +535,10 @@ export function sendTemporaryMedia(roomId: string, inviteToken: string, memberId
     memberId,
     alias: member.alias,
     kind,
+    ...(kind === "voice" ? { viewOnce } : {}),
     ...(kind === "document" ? { fileName: safeFileName, mimeType: mimeType || dataUrl.slice(5, dataUrl.indexOf(";")) } : {}),
     dataUrl,
-    sentAt: Date.now(),
+    sentAt: nextContentTimestamp(room),
     consumedBy: []
   });
   const snap = snapshot(room, memberId);
@@ -449,18 +552,56 @@ export function consumeTemporaryMedia(roomId: string, inviteToken: string, membe
   const item = room.media.find((media) => media.id === mediaId);
   if (!item) throw new Error("This media is no longer available.");
   if (item.kind === "document") throw new Error("Documents remain available until the room is closed.");
+  if (item.kind === "voice" && !item.viewOnce) {
+    throw new Error("Replayable voice notes do not expire.");
+  }
   if (item.memberId === memberId) throw new Error("Only the recipient can consume this media.");
   if (item.consumedBy.includes(memberId)) throw new Error("This media is no longer available.");
   
   item.consumedBy.push(memberId);
   
-  // If everyone else has consumed it, delete it from memory
-  const expectedConsumersCount = room.guests.length + (item.memberId === room.host.id ? 0 : 1) - 1; // total participants minus sender
-  if (item.consumedBy.length >= expectedConsumersCount) {
+  // The host's items are consumed by every guest; a guest's item is consumed by
+  // the host and every other guest. In both cases the count is room.guests.length.
+  // Keep an explicit view-once voice note for its sender's own replayable copy;
+  // recipient snapshots still hide it after that recipient consumes it.
+  const expectedConsumersCount = room.guests.length;
+  if (item.kind !== "voice" && item.consumedBy.length >= expectedConsumersCount) {
     item.dataUrl = undefined;
   }
   
   const snap = snapshot(room, memberId);
+  notifyRoomSubscribers(roomId);
+  return snap;
+}
+
+export function deleteTemporaryContent(
+  roomId: string,
+  inviteToken: string,
+  memberToken: string,
+  contentType: "message" | "media",
+  contentId: string,
+) {
+  const room = requireRoom(roomId, inviteToken);
+  const member = [room.host, ...room.guests].find((participant) => participant.memberToken === memberToken);
+  if (!member) throw new Error("You do not have permission to delete content in this room.");
+
+  if (contentType === "message") {
+    const index = room.messages.findIndex((item) => item.id === contentId);
+    if (index < 0) throw new Error("This message is no longer available.");
+    if (room.messages[index]!.memberId !== member.id) {
+      throw new Error("You can only delete your own messages.");
+    }
+    room.messages.splice(index, 1);
+  } else {
+    const index = room.media.findIndex((item) => item.id === contentId);
+    if (index < 0) throw new Error("This media is no longer available.");
+    if (room.media[index]!.memberId !== member.id) {
+      throw new Error("You can only delete your own media.");
+    }
+    room.media.splice(index, 1);
+  }
+
+  const snap = snapshot(room, member.id);
   notifyRoomSubscribers(roomId);
   return snap;
 }
@@ -475,10 +616,12 @@ export function leaveTemporaryRoom(roomId: string, inviteToken: string, memberId
   // Actually, if host leaves, should we close the room? Yes.
   // If guest leaves, we could just remove them from the guests array.
   if (room.call && room.call.participants.includes(memberId)) {
-    room.call.participants = room.call.participants.filter(id => id !== memberId);
-    if (room.call.participants.length === 0 || room.call.initiatorId === memberId) {
+    const remainingCallParticipants = room.call.participants.filter((id) => id !== memberId);
+    if (remainingCallParticipants.length < 2) {
       room.call = undefined;
       room.signals = [];
+    } else {
+      room.call.participants = remainingCallParticipants;
     }
   }
   if (room.host.id === memberId) {
@@ -517,6 +660,11 @@ export function startTemporaryCall(
 ) {
   const room = requireRoom(roomId, inviteToken);
   const participant = getParticipant(room, memberId);
+  if (room.guests.length === 0) throw new Error("A friend must join the room before you can call.");
+  if (room.call) throw new Error("A call is already active in this room.");
+  if (targetId && ![room.host, ...room.guests].some((candidate) => candidate.id === targetId)) {
+    throw new Error("The selected call recipient is not in this room.");
+  }
   room.call = {
     initiatorId: memberId,
     initiatorAlias: participant.alias,
@@ -573,16 +721,32 @@ export function sendTemporaryCallSignal(
 ) {
   const room = requireRoom(roomId, inviteToken);
   getParticipant(room, memberId);
+  if (!room.call) throw new Error("There is no active call to signal.");
+  if (!room.call.participants.includes(memberId)) {
+    throw new Error("Join the call before sending call signals.");
+  }
+  const remoteParticipants = room.call.participants.filter((id) => id !== memberId);
+  if (type === "end") {
+    if (receiverId !== "all" && !remoteParticipants.includes(receiverId)) {
+      throw new Error("The call signal recipient is not a participant in this call.");
+    }
+  } else if (remoteParticipants.length !== 1 || receiverId !== remoteParticipants[0]) {
+    throw new Error("The call signal recipient is not a participant in this call.");
+  }
+  if (type === "offer" && room.call.initiatorId !== memberId) {
+    throw new Error("Only the caller can send the initial call offer.");
+  }
+  if (type === "answer" && room.call.initiatorId === memberId) {
+    throw new Error("Only the other participant can answer the call offer.");
+  }
   if (!room.signals) room.signals = [];
 
   // Anchor offer & answer directly on call object so they are never lost or pruned
-  if (room.call) {
-    if (type === 'offer') {
-      room.call.offer = payload;
-    }
-    if (type === 'answer') {
-      room.call.answer = payload;
-    }
+  if (type === 'offer') {
+    room.call.offer = payload;
+  }
+  if (type === 'answer') {
+    room.call.answer = payload;
   }
 
   // Prevent memory unbounded growth while keeping non-ice signals intact

@@ -13,6 +13,9 @@ import {
   sendTemporaryMessage,
   sendTemporaryMedia,
   consumeTemporaryMedia,
+  deleteTemporaryContent,
+  reportTemporaryScreenshotShortcut,
+  getTemporaryCallIceServers,
   setTemporaryTyping,
   startTemporaryCall,
   joinTemporaryCall,
@@ -51,11 +54,24 @@ export const appRouter = router({
     send: publicProcedure.input(roomInput.extend({ body: z.string() })).mutation(({ input }) =>
       sendTemporaryMessage(input.roomId, input.inviteToken, input.memberId, input.body),
     ),
-    sendMedia: publicProcedure.input(roomInput.extend({ kind: z.enum(["voice", "photo", "video", "document"]), dataUrl: z.string(), fileName: z.string().max(180).optional(), mimeType: z.string().max(120).optional() })).mutation(({ input }) =>
-      sendTemporaryMedia(input.roomId, input.inviteToken, input.memberId, input.kind, input.dataUrl, input.fileName, input.mimeType),
+    sendMedia: publicProcedure.input(roomInput.extend({ kind: z.enum(["voice", "photo", "video", "document"]), dataUrl: z.string(), fileName: z.string().max(180).optional(), mimeType: z.string().max(120).optional(), viewOnce: z.boolean().optional() })).mutation(({ input }) =>
+      sendTemporaryMedia(input.roomId, input.inviteToken, input.memberId, input.kind, input.dataUrl, input.fileName, input.mimeType, input.viewOnce),
     ),
     consumeMedia: publicProcedure.input(roomInput.extend({ mediaId: z.string().min(8).max(32) })).mutation(({ input }) =>
       consumeTemporaryMedia(input.roomId, input.inviteToken, input.memberId, input.mediaId),
+    ),
+    deleteContent: publicProcedure.input(z.object({
+      roomId: z.string().min(8).max(64),
+      inviteToken: z.string().min(16).max(96),
+      memberToken: z.string().min(16).max(64),
+      contentType: z.enum(["message", "media"]),
+      contentId: z.string().min(8).max(32),
+    })).mutation(({ input }) =>
+      deleteTemporaryContent(input.roomId, input.inviteToken, input.memberToken, input.contentType, input.contentId),
+    ),
+    iceServers: publicProcedure.query(() => getTemporaryCallIceServers()),
+    reportScreenshotShortcut: publicProcedure.input(roomInput.extend({ memberToken: z.string().min(16).max(64) })).mutation(({ input }) =>
+      reportTemporaryScreenshotShortcut(input.roomId, input.inviteToken, input.memberId, input.memberToken),
     ),
     typing: publicProcedure.input(roomInput.extend({ isTyping: z.boolean() })).mutation(({ input }) =>
       setTemporaryTyping(input.roomId, input.inviteToken, input.memberId, input.isTyping),
