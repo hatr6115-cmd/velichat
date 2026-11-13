@@ -65,8 +65,8 @@ export default function TemporaryQr({ inviteUrl, onScan, onClose, inline = false
   return (
     <div className={`flex flex-col items-center ${inline ? "" : "p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-xl"}`}>
       <div className="w-full text-center mb-4">
-        <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Invite a Friend</h3>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Scan with camera or share the invite link</p>
+        <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Invite People</h3>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Share it with a group; the room holds up to 50 people total</p>
       </div>
 
       {/* QR Code Container */}

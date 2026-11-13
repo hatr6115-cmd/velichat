@@ -10,8 +10,10 @@
 - [x] Generate temporary QR invitations
 - [x] Add share, download-QR, and copy-link actions
 - [x] Add invite review screen showing the host alias
-- [x] Allow one recipient to join with a chosen alias
-- [x] Enforce the two-participant room limit
+- [x] Allow multiple invite-link guests to join with chosen aliases
+- [x] Support up to 50 room participants (host plus 49 guests)
+- [x] Keep the invite QR open as more guests join and identify connected rooms as group chats
+- [x] Test group message delivery and full-room behavior
 - [x] Add room-only temporary messaging
 - [x] Show clear ended, invalid, and full-room states
 - [x] Disclose that Android blocks OS capture while browsers and external cameras cannot be guaranteed
@@ -76,14 +78,17 @@
 
 - [x] Add in-memory voice-note, photo, and video items with size and MIME validation
 - [x] Add voice-note recording and sending controls
-- [x] Allow recipients to play voice notes once, then consume the media payload
+- [x] Keep ordinary voice notes replayable for senders and recipients; add a separate opt-in view-once voice mode
 - [x] Add view-once photo and video selection/sending controls
 - [x] Allow recipients to open view-once photos and videos once, then consume the media payload
 - [x] Remove elapsed-time view-once countdowns; close media when dismissed, backgrounded, or playback ends
-- [x] Remove consumed media payloads and clear room media on teardown
-- [x] Disclose that Android blocks OS capture while browser capture cannot be guaranteed
-- [x] Add unit tests for media validation, one-play, one-view, and room teardown
-- [ ] Visually verify voice, photo, and video controls on desktop and mobile layouts
+- [x] Redact consumed view-once media per recipient and clear room media on teardown
+- [x] Allow participants to delete only their own messages and media, for everyone in the room
+- [x] Keep Android `FLAG_SECURE`; document that browsers can only best-effort report some screenshot keyboard shortcuts, not OS/phone captures
+- [x] Broadcast and display rate-limited screenshot-shortcut notices without claiming a capture was confirmed
+- [x] Render messages and media together in send-time order, including sends within the same millisecond
+- [x] Add tests for media ordering, screenshot-notice broadcast and authorization, replayable/view-once media, deletion, and call signaling
+- [ ] Visually verify screenshot-key notices and mixed text/media ordering on desktop and mobile layouts
 
 ## Source archive
 

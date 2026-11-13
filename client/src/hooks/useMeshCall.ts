@@ -8,27 +8,18 @@ type CallStatus = "calling" | "ringing" | "connected" | "ended";
 
 type RemoteEntry = { memberId: string; stream: MediaStream };
 
-const rtcConfig: RTCConfiguration = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun.cloudflare.com:3478" },
-    {
-      urls: [
-        "turn:staticauth.openrelay.metered.ca:80",
-        "turn:staticauth.openrelay.metered.ca:80?transport=tcp",
-        "turn:staticauth.openrelay.metered.ca:443",
-        "turn:staticauth.openrelay.metered.ca:443?transport=tcp",
-        "turns:staticauth.openrelay.metered.ca:443?transport=tcp",
-      ],
-      username: "openrelayproject",
-      credential: "openrelayprojectsecret",
-    },
-  ],
-  iceCandidatePoolSize: 10,
-};
+const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
+];
 
 export function useMeshCall(session: Session | null, room: RoomSnapshot | null | undefined) {
   const sendSignal = trpc.temporary.sendSignal.useMutation();
+  const { refetch: refetchIceServers } = trpc.temporary.iceServers.useQuery(undefined, {
+    enabled: false,
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
   const startCall = trpc.temporary.startCall.useMutation();
   const joinCall = trpc.temporary.joinCall.useMutation();
   const endCall = trpc.temporary.endCall.useMutation();
@@ -44,7 +35,12 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const [callError, setCallError] = useState<string | null>(null);
 
   const localRef = useRef<MediaStream | null>(null);
+  const iceServersRef = useRef<RTCIceServer[]>(FALLBACK_ICE_SERVERS);
+  const iceServersLoadedAtRef = useRef(0);
+  const iceServersPromiseRef = useRef<Promise<RTCIceServer[]> | null>(null);
   const peersRef = useRef(new Map<string, RTCPeerConnection>());
+  const receivedRemoteTracksRef = useRef(new Set<string>());
+  const connectingTimersRef = useRef(new Map<string, number>());
   const pendingIceRef = useRef(new Map<string, RTCIceCandidateInit[]>());
   const creatingRef = useRef(new Set<string>());
   const processedSignalsRef = useRef(new Set<string>());
@@ -53,9 +49,35 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const hadActiveCallRef = useRef(false);
   const endedCallKeyRef = useRef<string | null>(null);
   const roomCallPresentRef = useRef(Boolean(room?.call));
+  const roomCallKeyRef = useRef<string | null>(room?.call ? `${room.call.initiatorId}:${room.call.startedAt}` : null);
   const missingCallTimerRef = useRef<number | undefined>(undefined);
   const sessionKeyRef = useRef(session ? `${session.roomId}:${session.memberId}` : null);
   roomCallPresentRef.current = Boolean(room?.call);
+  roomCallKeyRef.current = room?.call ? `${room.call.initiatorId}:${room.call.startedAt}` : null;
+
+  const loadIceServers = useCallback(() => {
+    if (iceServersPromiseRef.current) return iceServersPromiseRef.current;
+    if (Date.now() - iceServersLoadedAtRef.current < 5 * 60_000) {
+      return Promise.resolve(iceServersRef.current);
+    }
+    const request = refetchIceServers()
+      .then((result) => {
+        if (result.data?.length) {
+          iceServersRef.current = result.data as RTCIceServer[];
+          iceServersLoadedAtRef.current = Date.now();
+        }
+        return iceServersRef.current;
+      })
+      .catch((error) => {
+        console.warn("Could not load TURN configuration; trying the available STUN servers:", error);
+        return iceServersRef.current;
+      })
+      .finally(() => {
+        iceServersPromiseRef.current = null;
+      });
+    iceServersPromiseRef.current = request;
+    return request;
+  }, [refetchIceServers]);
 
   const send = useCallback(async (receiverId: string, type: "offer" | "answer" | "ice" | "end", payload: unknown) => {
     if (!session) return;
@@ -74,6 +96,10 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   }, []);
 
   const closePeer = useCallback((memberId: string) => {
+    const connectingTimer = connectingTimersRef.current.get(memberId);
+    if (connectingTimer !== undefined) window.clearTimeout(connectingTimer);
+    connectingTimersRef.current.delete(memberId);
+    receivedRemoteTracksRef.current.delete(memberId);
     const pc = peersRef.current.get(memberId);
     if (pc) {
       pc.ontrack = null;
@@ -182,14 +208,39 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   }, [configureSenderQuality]);
 
   const createPeer = useCallback(async (remoteId: string, offerer: boolean) => {
-    if (!session || !localRef.current || peersRef.current.has(remoteId) || creatingRef.current.has(remoteId)) return;
+    const callKey = roomCallKeyRef.current;
+    if (!session || !callKey || !localRef.current || peersRef.current.has(remoteId) || creatingRef.current.has(remoteId)) return;
     creatingRef.current.add(remoteId);
-    const pc = new RTCPeerConnection(rtcConfig);
+    let pc: RTCPeerConnection;
+    try {
+      const iceServers = await loadIceServers();
+      if (!session || !localRef.current || roomCallKeyRef.current !== callKey) {
+        creatingRef.current.delete(remoteId);
+        return;
+      }
+      pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 10 });
+    } catch (error) {
+      creatingRef.current.delete(remoteId);
+      throw error;
+    }
     peersRef.current.set(remoteId, pc);
+    const clearConnectingTimer = () => {
+      const timer = connectingTimersRef.current.get(remoteId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      connectingTimersRef.current.delete(remoteId);
+    };
+    connectingTimersRef.current.set(remoteId, window.setTimeout(() => {
+      const current = peersRef.current.get(remoteId);
+      if (current === pc && !receivedRemoteTracksRef.current.has(remoteId)) {
+        setCallError("The call connected without receiving audio or video. Check your network and try again.");
+      }
+    }, 25_000));
 
     // Install handlers before adding tracks or starting ICE gathering so early
     // candidates and remote tracks cannot be missed.
     pc.ontrack = (event) => {
+      receivedRemoteTracksRef.current.add(remoteId);
+      clearConnectingTimer();
       const stream = event.streams[0] || new MediaStream([event.track]);
       setRemoteStreams((items) => {
         const existing = items.find((item) => item.memberId === remoteId);
@@ -249,7 +300,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     } finally {
       creatingRef.current.delete(remoteId);
     }
-  }, [attachLocalTracks, closePeer, send, session]);
+  }, [attachLocalTracks, closePeer, loadIceServers, send, session]);
 
   const flushIce = useCallback(async (memberId: string, pc: RTCPeerConnection) => {
     const queued = pendingIceRef.current.get(memberId) || [];
@@ -265,6 +316,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     setCallKind(kind);
     setCallStatus("calling");
     try {
+      void loadIceServers();
       const stream = await getMedia(kind);
       localRef.current = stream;
       setLocalStream(stream);
@@ -275,13 +327,14 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       cleanup();
       setCallError(message);
     }
-  }, [cleanup, getMedia, joinCall, room, session]);
+  }, [cleanup, getMedia, joinCall, loadIceServers, room, session]);
 
   const start = useCallback(async (kind: CallKind) => {
     if (!session || !room || room.participantCount < 2 || isInCall) return;
     cleanup();
     setCallError(null);
     try {
+      void loadIceServers();
       const stream = await getMedia(kind);
       localRef.current = stream;
       setLocalStream(stream);
@@ -295,7 +348,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       cleanup();
       setCallError(message);
     }
-  }, [cleanup, getMedia, isInCall, room, session, startCall]);
+  }, [cleanup, getMedia, isInCall, loadIceServers, room, session, startCall]);
 
   const hangup = useCallback(async () => {
     if (session) {

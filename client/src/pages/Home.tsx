@@ -9,6 +9,7 @@ import {
   Dice5,
   Download,
   Eye,
+  EyeOff,
   FileText,
   Flame,
   Image as ImageIcon,
@@ -31,9 +32,19 @@ import {
   Phone,
   WifiOff,
   PlusCircle,
+  Palette,
+  Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import TemporaryQr from "@/components/TemporaryQr";
@@ -66,6 +77,23 @@ const RANDOM_ALIASES = [
   "Robin",
 ];
 
+type ChatBackground = "default" | "sky" | "rose" | "sage" | "sand" | "slate";
+
+const CHAT_BACKGROUND_STORAGE_PREFIX = "veilchat.room-background.v1.";
+const CHAT_BACKGROUNDS: Array<{
+  value: ChatBackground;
+  label: string;
+  feedClass: string;
+  swatchClass: string;
+}> = [
+  { value: "default", label: "Default", feedClass: "bg-zinc-100/70 dark:bg-zinc-950", swatchClass: "bg-zinc-300 dark:bg-zinc-700" },
+  { value: "sky", label: "Sky", feedClass: "bg-sky-50 dark:bg-sky-950/50", swatchClass: "bg-sky-300 dark:bg-sky-700" },
+  { value: "rose", label: "Rose", feedClass: "bg-rose-50 dark:bg-rose-950/40", swatchClass: "bg-rose-300 dark:bg-rose-700" },
+  { value: "sage", label: "Sage", feedClass: "bg-emerald-50 dark:bg-emerald-950/40", swatchClass: "bg-emerald-300 dark:bg-emerald-700" },
+  { value: "sand", label: "Sand", feedClass: "bg-amber-50 dark:bg-amber-950/40", swatchClass: "bg-amber-300 dark:bg-amber-700" },
+  { value: "slate", label: "Slate", feedClass: "bg-slate-200 dark:bg-slate-900", swatchClass: "bg-slate-400 dark:bg-slate-600" },
+];
+
 declare global {
   interface Window {
     VeilChatClipboard?: { copyText: (text: string) => void };
@@ -76,6 +104,7 @@ type Session = {
   roomId: string;
   inviteToken: string;
   memberId: string;
+  memberToken?: string;
   alias: string;
   invite: TemporaryInvite;
 };
@@ -108,6 +137,7 @@ function readSavedSession(): Session | null {
       roomId: stored.roomId,
       inviteToken: stored.inviteToken,
       memberId: stored.memberId,
+      memberToken: typeof stored.memberToken === "string" ? stored.memberToken : undefined,
       alias: stored.alias,
       invite,
     };
@@ -164,9 +194,17 @@ export default function Home() {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [isEndModalOpen, setIsEndModalOpen] = useState(false);
+  const [isChatBackgroundMenuOpen, setIsChatBackgroundMenuOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{
+    contentId: string;
+    contentType: "message" | "media";
+    label: string;
+  } | null>(null);
+  const [chatBackground, setChatBackground] = useState<ChatBackground>("default");
 
   // Ephemeral Media States
   const [isRecording, setIsRecording] = useState(false);
+  const [isVoiceViewOnce, setIsVoiceViewOnce] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [selectedPhoto, setSelectedPhoto] = useState<{ file: File; dataUrl: string } | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<{ file: File; dataUrl: string } | null>(null);
@@ -174,6 +212,8 @@ export default function Home() {
   const [activePhoto, setActivePhoto] = useState<string | null>(null);
   const [activeVideo, setActiveVideo] = useState<string | null>(null);
   const [consumedMediaIds, setConsumedMediaIds] = useState<Set<string>>(() => new Set());
+  const [activeViewOnceVoiceIds, setActiveViewOnceVoiceIds] = useState<Set<string>>(() => new Set());
+  const [activeViewOnceVoiceSources, setActiveViewOnceVoiceSources] = useState<Record<string, string>>({});
 
   // tRPC mutations
   const createRoom = trpc.temporary.create.useMutation();
@@ -181,20 +221,20 @@ export default function Home() {
   const sendMessage = trpc.temporary.send.useMutation();
   const sendMedia = trpc.temporary.sendMedia.useMutation();
   const consumeMedia = trpc.temporary.consumeMedia.useMutation();
+  const deleteContent = trpc.temporary.deleteContent.useMutation();
+  const reportScreenshotShortcut = trpc.temporary.reportScreenshotShortcut.useMutation();
   const setTyping = trpc.temporary.typing.useMutation();
   const acknowledge = trpc.temporary.acknowledge.useMutation();
   const markRead = trpc.temporary.markRead.useMutation();
   const leaveRoom = trpc.temporary.leave.useMutation();
-  const startCallMutation = trpc.temporary.startCall.useMutation();
-  const joinCallMutation = trpc.temporary.joinCall.useMutation();
-  const endCallMutation = trpc.temporary.endCall.useMutation();
-  const sendSignalMutation = trpc.temporary.sendSignal.useMutation();
 
   const typingTimerRef = useRef<number | undefined>(undefined);
   const recordingTimerRef = useRef<number | undefined>(undefined);
   const messageNodesRef = useRef(new Map<string, HTMLElement>());
   const messageListRef = useRef<HTMLDivElement>(null);
   const readObserverRef = useRef<IntersectionObserver | null>(null);
+  const lastScreenshotShortcutReportAtRef = useRef(0);
+  const seenScreenshotShortcutNoticesRef = useRef<{ roomId: string; ids: Set<string> } | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -249,6 +289,24 @@ export default function Home() {
   );
 
   const room = sseData || roomQuery.data;
+  const timelineItems = useMemo(() => {
+    const messages = (room?.messages ?? []).map((item) => ({ kind: "message" as const, item }));
+    const media = (room?.media ?? []).map((item) => ({ kind: "media" as const, item }));
+    return [...messages, ...media].sort((left, right) => left.item.sentAt - right.item.sentAt);
+  }, [room?.messages, room?.media]);
+
+  useEffect(() => {
+    if (!room) return;
+    const activeMediaIds = new Set(room.media.map((item) => item.id));
+    setActiveViewOnceVoiceIds((previous) => {
+      const next = new Set(Array.from(previous).filter((id) => activeMediaIds.has(id)));
+      return next.size === previous.size ? previous : next;
+    });
+    setActiveViewOnceVoiceSources((previous) => {
+      const nextEntries = Object.entries(previous).filter(([id]) => activeMediaIds.has(id));
+      return nextEntries.length === Object.keys(previous).length ? previous : Object.fromEntries(nextEntries);
+    });
+  }, [room?.media]);
 
   // Keep the room credentials on this device so a refresh can restore the same
   // participant instead of accidentally joining as a duplicate guest.
@@ -260,6 +318,16 @@ export default function Home() {
       /* browser storage can be unavailable; the in-memory room still works */
     }
   }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    try {
+      const saved = window.localStorage.getItem(`${CHAT_BACKGROUND_STORAGE_PREFIX}${session.roomId}`);
+      setChatBackground(CHAT_BACKGROUNDS.some((option) => option.value === saved) ? saved as ChatBackground : "default");
+    } catch {
+      setChatBackground("default");
+    }
+  }, [session?.roomId]);
 
   useEffect(() => {
     const flushPendingRoomLeave = async () => {
@@ -407,19 +475,82 @@ export default function Home() {
     if (callError) toast.error(callError);
   }, [callError]);
 
-  // Auto-scroll message feed
+  // Browsers expose some keyboard screenshot shortcuts but do not report OS or
+  // phone screenshots. Treat these key events as possible attempts, not proof.
+  useEffect(() => {
+    const activeSession = session;
+    const activeMemberToken = activeSession?.memberToken;
+    if (
+      !activeSession ||
+      !activeMemberToken ||
+      room?.roomId !== activeSession.roomId ||
+      room.participantCount < 2
+    ) return;
+
+    const handleScreenshotShortcut = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const printScreenKey = event.code === "PrintScreen" || key === "printscreen" || key === "print screen";
+      const macScreenshotShortcut = event.metaKey && event.shiftKey && ["Digit3", "Digit4", "Digit5"].includes(event.code);
+      const windowsScreenshotShortcut = event.metaKey && event.shiftKey && key === "s";
+      if (event.repeat || (!printScreenKey && !macScreenshotShortcut && !windowsScreenshotShortcut)) return;
+
+      const now = Date.now();
+      if (now - lastScreenshotShortcutReportAtRef.current < 5_000) return;
+      lastScreenshotShortcutReportAtRef.current = now;
+
+      toast("Possible screenshot shortcut detected", {
+        description: "Your browser can report this key press, but cannot confirm that a screenshot was captured.",
+        duration: 8_000,
+      });
+      void reportScreenshotShortcut.mutateAsync({
+        roomId: activeSession.roomId,
+        inviteToken: activeSession.inviteToken,
+        memberId: activeSession.memberId,
+        memberToken: activeMemberToken,
+      }).catch(() => toast.error("Could not send the possible screenshot notice to the room."));
+    };
+
+    window.addEventListener("keydown", handleScreenshotShortcut, true);
+    return () => window.removeEventListener("keydown", handleScreenshotShortcut, true);
+  }, [
+    session?.roomId,
+    session?.inviteToken,
+    session?.memberId,
+    session?.memberToken,
+    reportScreenshotShortcut.mutateAsync,
+    room?.roomId,
+    room?.participantCount,
+  ]);
+
+  useEffect(() => {
+    if (!session || room?.roomId !== session.roomId) return;
+    const notices = room.screenshotShortcutNotices;
+    const previous = seenScreenshotShortcutNoticesRef.current;
+    if (!previous || previous.roomId !== session.roomId) {
+      seenScreenshotShortcutNoticesRef.current = {
+        roomId: session.roomId,
+        ids: new Set(notices.map((notice) => notice.id)),
+      };
+      return;
+    }
+
+    notices.forEach((notice) => {
+      if (previous.ids.has(notice.id)) return;
+      previous.ids.add(notice.id);
+      if (notice.memberId === session.memberId) return;
+      toast(`${notice.alias} may have used a screenshot shortcut`, {
+        description: "Their browser reported a key press; it cannot confirm that a screenshot was captured.",
+        duration: 10_000,
+      });
+    });
+  }, [room?.roomId, room?.screenshotShortcutNotices, session?.roomId, session?.memberId]);
+
+  // Auto-scroll message feed after any new chat item is added.
   useEffect(() => {
     if (messageListRef.current) {
       messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
     }
-  }, [room?.messages?.length, room?.media?.length]);
-
-  // When guest connects, automatically dismiss QR modal
-  useEffect(() => {
-    if (room?.participantCount === 2 && isQrModalOpen) {
-      setIsQrModalOpen(false);
-    }
-  }, [room?.participantCount, isQrModalOpen]);
+  }, [timelineItems.length]);
 
   // Dismiss modals on Escape key
   useEffect(() => {
@@ -430,11 +561,12 @@ export default function Home() {
         if (activePhoto) closeActivePhoto();
         if (activeVideo) closeActiveVideo();
         if (isScannerOpen) setIsScannerOpen(false);
+        if (isChatBackgroundMenuOpen) setIsChatBackgroundMenuOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isQrModalOpen, isEndModalOpen, activePhoto, activeVideo, isScannerOpen]);
+  }, [isQrModalOpen, isEndModalOpen, activePhoto, activeVideo, isScannerOpen, isChatBackgroundMenuOpen]);
 
   // Read receipts tracking via IntersectionObserver
   useEffect(() => {
@@ -513,6 +645,18 @@ export default function Home() {
     setAlias(random);
   };
 
+  function chooseChatBackground(background: ChatBackground) {
+    setChatBackground(background);
+    setIsChatBackgroundMenuOpen(false);
+    if (session) {
+      try {
+        window.localStorage.setItem(`${CHAT_BACKGROUND_STORAGE_PREFIX}${session.roomId}`, background);
+      } catch {
+        /* The current chat still uses the selected background until it closes. */
+      }
+    }
+  }
+
   const handleScanSuccess = (code: string) => {
     try {
       let invitePayload = code;
@@ -546,6 +690,7 @@ export default function Home() {
         roomId: result.roomId,
         inviteToken: result.inviteToken,
         memberId: result.currentMemberId,
+        memberToken: result.memberToken,
         alias: result.currentAlias,
         invite: roomInvite,
       });
@@ -572,6 +717,7 @@ export default function Home() {
         roomId: result.roomId,
         inviteToken: invite.inviteToken,
         memberId: result.currentMemberId,
+        memberToken: result.memberToken,
         alias: result.currentAlias,
         invite,
       });
@@ -753,8 +899,10 @@ export default function Home() {
   async function startRecording() {
     if (!session || (room?.participantCount ?? 1) < 2) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      toast.error("Voice recording is not available in this browser.");
       return;
     }
+    const sendViewOnce = isVoiceViewOnce;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
@@ -782,6 +930,7 @@ export default function Home() {
               memberId: session.memberId,
               kind: "voice",
               dataUrl,
+              viewOnce: sendViewOnce,
             });
           } catch (cause: any) {
             console.warn("Error transmitting voice note:", cause);
@@ -872,6 +1021,36 @@ export default function Home() {
     }
   }
 
+  async function confirmDeleteContent() {
+    if (!session || !session.memberToken || !pendingDelete) return;
+    try {
+      await deleteContent.mutateAsync({
+        roomId: session.roomId,
+        inviteToken: session.inviteToken,
+        memberToken: session.memberToken,
+        contentType: pendingDelete.contentType,
+        contentId: pendingDelete.contentId,
+      });
+      if (pendingDelete.contentType === "media") {
+        setActiveViewOnceVoiceIds((previous) => {
+          const next = new Set(previous);
+          next.delete(pendingDelete.contentId);
+          return next;
+        });
+        setActiveViewOnceVoiceSources((previous) => {
+          const next = { ...previous };
+          delete next[pendingDelete.contentId];
+          return next;
+        });
+      }
+      setPendingDelete(null);
+      void roomQuery.refetch();
+      toast.success(`${pendingDelete.label} deleted for everyone`);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not delete this item.");
+    }
+  }
+
   function openViewOncePhoto(item: { id: string; dataUrl?: string }) {
     if (!item.dataUrl) return;
     closeActivePhoto();
@@ -925,21 +1104,24 @@ export default function Home() {
   if (session) {
     const pCount = room?.participantCount ?? 1;
     const connected = pCount > 1;
+    const chatBackgroundClass = CHAT_BACKGROUNDS.find((option) => option.value === chatBackground)?.feedClass || CHAT_BACKGROUNDS[0]!.feedClass;
     const otherAliases = room
       ? session.alias === room.hostAlias
         ? room.guestAliases
         : [room.hostAlias, ...(room.guestAliases || []).filter((a) => a !== session.alias)]
       : [];
-    const partnerAlias = pCount === 2 ? otherAliases[0] : pCount > 2 ? `${pCount - 1} NODES` : undefined;
+    const isGroupRoom = pCount > 2;
+    const partnerAlias = pCount === 2 ? otherAliases[0] : isGroupRoom ? `${pCount - 1} NODES` : undefined;
+    const participantNames = room ? [room.hostAlias, ...room.guestAliases] : [];
 
     return (
-      <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-zinc-50 font-sans text-zinc-900 transition-colors dark:bg-zinc-950 dark:text-zinc-100 sm:mx-auto sm:max-w-3xl">
+      <div className="flex h-[100dvh] min-h-0 max-h-[100dvh] w-full flex-col overflow-hidden bg-zinc-50 font-sans text-zinc-900 transition-colors dark:bg-zinc-950 dark:text-zinc-100 sm:mx-auto sm:max-w-3xl">
         {/* Conversation header */}
-        <header className="z-20 flex shrink-0 flex-col gap-2 border-b border-zinc-200 bg-white px-3 py-2.5 pt-[calc(0.625rem+env(safe-area-inset-top))] shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:flex-row sm:items-center sm:justify-between sm:px-4 sm:py-3 sm:pt-3">
+        <header className="relative z-20 flex shrink-0 flex-col gap-2 border-b border-zinc-200 bg-white px-3 py-2.5 pt-[calc(0.625rem+env(safe-area-inset-top))] shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:flex-row sm:items-center sm:justify-between sm:px-4 sm:py-3 sm:pt-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <div className="relative shrink-0">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-xs font-semibold text-white shadow-sm">
-                {(connected ? partnerAlias || "Friend" : "Wait").slice(0, 2).toUpperCase()}
+                {(connected ? isGroupRoom ? "GC" : partnerAlias || "Friend" : "Wait").slice(0, 2).toUpperCase()}
               </div>
               <span
                 className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white dark:border-zinc-900 ${
@@ -950,9 +1132,14 @@ export default function Home() {
 
             <div className="min-w-0 max-w-[70vw] sm:max-w-none">
               <span className="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                {connected ? partnerAlias : !isOnline || roomConnectionError ? "Reconnecting to your room" : room ? "Waiting for your friend" : "Restoring your room…"}
+                {connected ? isGroupRoom ? "Group chat" : partnerAlias : !isOnline || roomConnectionError ? "Reconnecting to your room" : room ? "Waiting for someone to join" : "Restoring your room…"}
               </span>
-              <span className="block min-h-4 truncate text-[11px] text-zinc-500 dark:text-zinc-400" role="status" aria-live="polite">
+              <span
+                className="block min-h-4 truncate text-[11px] text-zinc-500 dark:text-zinc-400"
+                title={connected && isGroupRoom ? `Participants: ${participantNames.join(", ")}` : undefined}
+                role="status"
+                aria-live="polite"
+              >
                 {!isOnline || roomConnectionError ? "Reconnecting automatically" : room?.typingAliases?.length ? (
                   <span className="inline-flex min-w-0 items-center gap-1.5 text-blue-600 dark:text-blue-400">
                     <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
@@ -965,7 +1152,7 @@ export default function Home() {
                         : `${room.typingAliases.join(", ")} are typing…`}
                     </span>
                   </span>
-                ) : connected ? `${pCount} online` : room ? "Share an invite link to start" : "Your saved session is loading…"}
+                ) : connected ? isGroupRoom ? `${pCount} participants` : `${pCount} online` : room ? "Share an invite link to start" : "Your saved session is loading…"}
               </span>
             </div>
           </div>
@@ -984,8 +1171,8 @@ export default function Home() {
                   type="button"
                   onClick={() => startCall("audio")}
                   disabled={!isOnline || isInCall || Boolean(room?.call)}
-                  title="Start voice call"
-                  aria-label="Start voice call"
+                  title="Start one-to-one voice call"
+                  aria-label="Start one-to-one voice call"
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-35 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
                 >
                   <Phone className="h-4 w-4" />
@@ -994,8 +1181,8 @@ export default function Home() {
                   type="button"
                   onClick={() => startCall("video")}
                   disabled={!isOnline || isInCall || Boolean(room?.call)}
-                  title="Start video call"
-                  aria-label="Start video call"
+                  title="Start one-to-one video call"
+                  aria-label="Start one-to-one video call"
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-35 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
                 >
                   <Video className="h-4 w-4" />
@@ -1006,11 +1193,24 @@ export default function Home() {
             <button
               type="button"
               onClick={() => setIsQrModalOpen(true)}
-              title="Show QR code"
-              aria-label="Show QR code"
+              title="Invite people to this room"
+              aria-label="Invite people to this room"
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-blue-600 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
             >
               <QrCode className="h-4 w-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsChatBackgroundMenuOpen((open) => !open)}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-blue-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
+              title="Choose chat background"
+              aria-label="Choose chat background"
+              aria-haspopup="true"
+              aria-expanded={isChatBackgroundMenuOpen}
+              aria-controls="chat-background-menu"
+            >
+              <Palette className="h-4 w-4" />
             </button>
 
             <button
@@ -1033,6 +1233,32 @@ export default function Home() {
               <LogOut className="h-4 w-4" />
             </button>
           </div>
+
+          {isChatBackgroundMenuOpen && (
+            <div
+              id="chat-background-menu"
+              role="group"
+              aria-label="Chat background choices"
+              className="absolute right-3 top-full z-40 mt-2 w-52 rounded-2xl border border-zinc-200 bg-white p-2 shadow-xl dark:border-zinc-700 dark:bg-zinc-900 sm:right-4"
+            >
+              <p className="px-2 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                Chat background
+              </p>
+              {CHAT_BACKGROUNDS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => chooseChatBackground(option.value)}
+                  aria-pressed={chatBackground === option.value}
+                  className="flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2 text-left text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  <span className={`h-4 w-4 shrink-0 rounded-full border border-black/10 dark:border-white/10 ${option.swatchClass}`} />
+                  <span className="flex-1">{option.label}</span>
+                  {chatBackground === option.value && <Check className="h-4 w-4 text-blue-600 dark:text-blue-400" />}
+                </button>
+              ))}
+            </div>
+          )}
         </header>
 
         {(roomConnectionError || !isOnline) && (
@@ -1053,7 +1279,7 @@ export default function Home() {
         {/* Message Feed */}
         <main
           ref={messageListRef}
-          className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 bg-zinc-100/70 dark:bg-zinc-950 overscroll-contain text-sm"
+          className={`min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 text-sm space-y-3 sm:p-5 ${chatBackgroundClass}`}
         >
           {!connected && (
             <div className="mx-auto my-6 max-w-sm space-y-3 rounded-2xl border border-zinc-200 bg-white p-5 text-center shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:my-8 sm:p-6">
@@ -1102,11 +1328,13 @@ export default function Home() {
 
           {(room?.messages && room.messages.length > 0) || (room?.media && room.media.length > 0) ? (
             <div className="mx-auto max-w-2xl space-y-3">
-              {room?.messages?.map((item) => {
-                const isOwn = item.memberId === session.memberId;
-                return (
-                  <div
-                    key={item.id}
+              {timelineItems.map((entry) => {
+                if (entry.kind === "message") {
+                  const item = entry.item;
+                  const isOwn = item.memberId === session.memberId;
+                  return (
+                    <div
+                      key={`message:${item.id}`}
                     ref={(node) => {
                       if (node) messageNodesRef.current.set(item.id, node);
                       else messageNodesRef.current.delete(item.id);
@@ -1151,34 +1379,54 @@ export default function Home() {
                         <button
                           type="button"
                           onClick={() => void copyMessage(item.id, item.body)}
-                          className={`ml-1 inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] transition-colors ${
+                          className={`ml-1 inline-flex min-h-9 items-center gap-1.5 rounded px-2 py-1.5 text-[11px] transition-colors ${
                             isOwn
                               ? "text-blue-100 hover:bg-blue-500 hover:text-white"
-                              : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                              : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
                           }`}
                           aria-label={copiedMessageId === item.id ? "Message copied" : "Copy message"}
                           title="Copy message"
                         >
-                          <Copy className="h-3 w-3" />
+                          <Copy className="h-3.5 w-3.5" />
                           <span>{copiedMessageId === item.id ? "Copied" : "Copy"}</span>
                         </button>
+                        {isOwn && session.memberToken && (
+                          <button
+                            type="button"
+                            onClick={() => setPendingDelete({ contentId: item.id, contentType: "message", label: "Message" })}
+                            className="inline-flex min-h-9 items-center gap-1 rounded px-2 py-1.5 text-[11px] text-red-200 transition-colors hover:bg-red-500/20 hover:text-white"
+                            aria-label="Delete your message for everyone"
+                            title="Delete message for everyone"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
-                );
-              })}
-
-              {room?.media?.map((item) => {
-                const isOwn = item.memberId === session.memberId;
-                const isConsumed =
-                  item.kind !== "document" && (
-                    consumedMediaIds.has(item.id) ||
-                    (item.consumedBy && item.consumedBy.includes(session.memberId)) ||
-                    !item.dataUrl
                   );
+                }
+
+                const item = entry.item;
+                const isOwn = item.memberId === session.memberId;
+                const isViewOnceMedia =
+                  item.kind === "photo" || item.kind === "video" ||
+                  (item.kind === "voice" && item.viewOnce === true);
+                const isVoicePlaybackInProgress =
+                  item.kind === "voice" && activeViewOnceVoiceIds.has(item.id);
+                const voiceSource = item.kind === "voice"
+                  ? item.dataUrl || activeViewOnceVoiceSources[item.id]
+                  : undefined;
+                const hasPlayableData = item.kind === "voice" ? Boolean(voiceSource) : Boolean(item.dataUrl);
+                const isConsumed = !hasPlayableData || (
+                  isViewOnceMedia &&
+                  (consumedMediaIds.has(item.id) || item.consumedBy.includes(session.memberId)) &&
+                  !isVoicePlaybackInProgress
+                );
 
                 return (
-                  <div key={item.id} className={`flex flex-col ${isOwn ? "items-end" : "items-start"}`}>
+                  <div key={`media:${item.id}`} className={`flex flex-col ${isOwn ? "items-end" : "items-start"}`}>
                     {!isOwn && (
                       <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 ml-1 mb-1">
                         {item.alias}
@@ -1220,17 +1468,37 @@ export default function Home() {
                               controlsList="nodownload"
                               playsInline
                               preload="auto"
-                              src={item.dataUrl}
+                              src={voiceSource}
                               className="w-full h-8"
+                              onPlay={() => {
+                                if (item.viewOnce && !isOwn && !activeViewOnceVoiceIds.has(item.id)) {
+                                  if (voiceSource) {
+                                    setActiveViewOnceVoiceSources((previous) => ({ ...previous, [item.id]: voiceSource }));
+                                  }
+                                  setActiveViewOnceVoiceIds((previous) => new Set(previous).add(item.id));
+                                  void consumeMediaOnce(item.id);
+                                }
+                              }}
                               onEnded={() => {
-                                if (!isOwn) void consumeMediaOnce(item.id);
+                                if (item.viewOnce && !isOwn) {
+                                  setActiveViewOnceVoiceIds((previous) => {
+                                    const next = new Set(previous);
+                                    next.delete(item.id);
+                                    return next;
+                                  });
+                                  setActiveViewOnceVoiceSources((previous) => {
+                                    const next = { ...previous };
+                                    delete next[item.id];
+                                    return next;
+                                  });
+                                }
                               }}
                             />
-                            {!isOwn && (
-                              <span className="text-[10px] text-zinc-500 dark:text-zinc-400 px-1">
-                                Plays once then disappears
-                              </span>
-                            )}
+                            <span className="px-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                              {item.viewOnce
+                                ? isOwn ? "View-once for recipients" : "Plays once then disappears"
+                                : "Replay anytime"}
+                            </span>
                           </div>
                         )
                       ) : item.kind === "photo" ? (
@@ -1263,6 +1531,20 @@ export default function Home() {
                             <Video className="w-4 h-4" /> Watch video (once)
                           </button>
                         )
+                      )}
+                      {isOwn && session.memberToken && (
+                        <div className="mt-1.5 flex justify-end border-t border-current/10 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setPendingDelete({ contentId: item.id, contentType: "media", label: "Media" })}
+                            className="inline-flex min-h-9 items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-300"
+                            aria-label={`Delete your ${item.kind} for everyone`}
+                            title="Delete your media for everyone"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1328,7 +1610,9 @@ export default function Home() {
             <div className="flex items-center justify-between gap-2 p-2 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 text-xs">
               <span className="flex items-center gap-1.5 font-medium pl-1 truncate">
                 <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse shrink-0" />
-                <span className="truncate">Recording... ({String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:{String(recordingSeconds % 60).padStart(2, "0")})</span>
+                <span className="truncate">
+                  Recording{isVoiceViewOnce ? " view-once" : ""}... ({String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:{String(recordingSeconds % 60).padStart(2, "0")})
+                </span>
               </span>
               <div className="flex gap-1.5 shrink-0">
                 <button
@@ -1418,10 +1702,27 @@ export default function Home() {
               <button
                 type="button"
                 disabled={!connected || !isOnline}
+                onClick={() => setIsVoiceViewOnce((current) => !current)}
+                className={`flex h-10 w-auto min-w-9 shrink-0 items-center justify-center gap-1 rounded-xl px-1.5 transition-colors disabled:opacity-40 sm:w-10 ${
+                  isVoiceViewOnce
+                    ? "bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:hover:bg-amber-900/60"
+                    : "text-zinc-500 hover:bg-zinc-100 hover:text-blue-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
+                }`}
+                title={isVoiceViewOnce ? "Next voice note will play once; tap for replayable" : "Voice notes replay by default; tap for view-once"}
+                aria-label={isVoiceViewOnce ? "Voice notes are view-once; switch to replayable" : "Voice notes are replayable; switch to view-once"}
+                aria-pressed={isVoiceViewOnce}
+              >
+                {isVoiceViewOnce ? <EyeOff className="h-4 w-4 sm:h-5 sm:w-5" /> : <Eye className="h-4 w-4 sm:h-5 sm:w-5" />}
+                {isVoiceViewOnce && <span className="text-[10px] font-semibold">Once</span>}
+              </button>
+
+              <button
+                type="button"
+                disabled={!connected || !isOnline}
                 onClick={startRecording}
                 className="flex h-10 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400 sm:w-10"
-                title="Record voice note"
-                aria-label="Record a voice note"
+                title={isVoiceViewOnce ? "Record a view-once voice note" : "Record a replayable voice note"}
+                aria-label={isVoiceViewOnce ? "Record a view-once voice note" : "Record a replayable voice note"}
               >
                 <Mic className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
@@ -1443,9 +1744,9 @@ export default function Home() {
                     }
                   }}
                   disabled={!connected || !isOnline}
-                  placeholder={!isOnline ? "Reconnect to send messages…" : connected ? "Type a message…" : "Waiting for friend to connect…"}
+                  placeholder={!isOnline ? "Reconnect to send messages…" : connected ? "Type a message…" : "Waiting for others to join…"}
                   aria-label="Message"
-                  className="min-h-10 max-h-[120px] w-full resize-none overflow-y-auto rounded-2xl border border-zinc-200 bg-zinc-100 px-3.5 py-2 text-sm text-zinc-900 transition-all placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800/80 dark:text-zinc-100"
+                  className="min-h-10 max-h-[120px] w-full resize-none overflow-y-auto rounded-2xl border border-zinc-200 bg-zinc-100 px-3.5 py-2 text-base text-zinc-900 transition-all placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800/80 dark:text-zinc-100 sm:text-sm"
                 />
               </div>
 
@@ -1537,6 +1838,40 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        <AlertDialog
+          open={Boolean(pendingDelete)}
+          onOpenChange={(open) => {
+            if (!open && !deleteContent.isPending) setPendingDelete(null);
+          }}
+        >
+          <AlertDialogContent className="border-zinc-200 bg-white text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this {pendingDelete?.label.toLowerCase() || "item"} for everyone?</AlertDialogTitle>
+              <AlertDialogDescription className="text-zinc-600 dark:text-zinc-400">
+                Everyone in this room will lose access to it. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <button
+                type="button"
+                disabled={deleteContent.isPending}
+                onClick={() => setPendingDelete(null)}
+                className="min-h-10 rounded-lg border border-zinc-300 px-4 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleteContent.isPending}
+                onClick={() => void confirmDeleteContent()}
+                className="min-h-10 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-wait disabled:opacity-60"
+              >
+                {deleteContent.isPending ? "Deleting…" : "Delete for everyone"}
+              </button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Call Modal */}
         {isInCall && (
@@ -1721,7 +2056,7 @@ export default function Home() {
             <a href={ANDROID_DOWNLOAD_URL} download className="text-blue-600 hover:underline dark:text-blue-400">Download Android app</a>
             <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed">
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-              <span>Android blocks system screenshots and recording. Browsers can’t guarantee capture prevention.</span>
+              <span>Android blocks system capture. Browsers can report some screenshot-key presses, but can’t detect OS or phone screenshots, or external cameras.</span>
             </p>
           </div>
         </div>

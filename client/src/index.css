@@ -4,6 +4,22 @@
 
 html {
   color-scheme: light;
+  min-height: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+body,
+#root {
+  min-height: 100%;
+}
+
+/* Keep iOS Safari from zooming the viewport when small form controls receive focus. */
+@media (max-width: 639px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 html.dark {
@@ -105,8 +121,9 @@ body {
 }
 
 /* Best-effort friction against saving/dragging view-once media in a browser.
-   This is not a screenshot/recording barrier; the native Android wrapper uses
-   FLAG_SECURE for OS-level capture protection. */
+   Browsers cannot reliably block screenshots or screen recording. The native
+   Android wrapper uses FLAG_SECURE for OS-level capture protection; iOS web
+   browsers do not expose an equivalent prevention API. */
 .protected-media,
 .protected-media * {
   -webkit-touch-callout: none;
