@@ -9,7 +9,6 @@ import {
   Dice5,
   Download,
   Eye,
-  EyeOff,
   FileText,
   Flame,
   Image as ImageIcon,
@@ -204,7 +203,6 @@ export default function Home() {
 
   // Ephemeral Media States
   const [isRecording, setIsRecording] = useState(false);
-  const [isVoiceViewOnce, setIsVoiceViewOnce] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [selectedPhoto, setSelectedPhoto] = useState<{ file: File; dataUrl: string } | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<{ file: File; dataUrl: string } | null>(null);
@@ -445,8 +443,8 @@ export default function Home() {
 
   const {
     isInCall, isInitiator, callKind, callStatus, localStream, remoteStreams, callError,
-    isMicMuted, isCamOff, start: startCall, accept: acceptCall, reject: rejectCall,
-    hangup: hangupCall, toggleMic, toggleCam,
+    isMicMuted, isCamOff, isSwitchingToVideo, start: startCall, switchToVideo,
+    accept: acceptCall, reject: rejectCall, hangup: hangupCall, toggleMic, toggleCam,
   } = useMeshCall(session ? { roomId: session.roomId, inviteToken: session.inviteToken, memberId: session.memberId } : null, room);
 
   // Wake a sleeping Render instance when the app opens, then keep it warm while open.
@@ -752,10 +750,10 @@ export default function Home() {
     if (typeof window === "undefined" || !window.MediaRecorder) return "";
     const candidates = [
       "audio/webm;codecs=opus",
+      "audio/ogg;codecs=opus",
       "audio/webm",
       "audio/mp4",
       "audio/aac",
-      "audio/ogg;codecs=opus",
       "audio/wav",
     ];
     for (const candidate of candidates) {
@@ -902,14 +900,37 @@ export default function Home() {
       toast.error("Voice recording is not available in this browser.");
       return;
     }
-    const sendViewOnce = isVoiceViewOnce;
+    let stream: MediaStream | undefined;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
+      stream = await navigator.mediaDevices.getUserMedia({
+        // Voice notes do not need echo cancellation. Prefer clean, mono 48 kHz
+        // capture and let Opus encode at a speech-friendly high bitrate.
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: true,
+          autoGainControl: false,
+          sampleRate: { ideal: 48_000 },
+          channelCount: { ideal: 1 },
+        },
       });
+      stream.getAudioTracks().forEach((track) => { track.contentHint = "speech"; });
       const preferredMime = getBestAudioMimeType();
-      const options = preferredMime ? { mimeType: preferredMime } : undefined;
-      const recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(stream, {
+          ...(preferredMime ? { mimeType: preferredMime } : {}),
+          audioBitsPerSecond: 128_000,
+        });
+      } catch {
+        // Some WebViews reject bitrate tuning; retain the best codec they accept.
+        try {
+          recorder = preferredMime
+            ? new MediaRecorder(stream, { mimeType: preferredMime })
+            : new MediaRecorder(stream);
+        } catch {
+          recorder = new MediaRecorder(stream);
+        }
+      }
       audioChunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
@@ -917,7 +938,8 @@ export default function Home() {
       };
 
       recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
+        stream?.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
         if (audioChunksRef.current.length > 0) {
           try {
             const recordedType = recorder.mimeType || preferredMime || "audio/webm";
@@ -930,24 +952,26 @@ export default function Home() {
               memberId: session.memberId,
               kind: "voice",
               dataUrl,
-              viewOnce: sendViewOnce,
             });
           } catch (cause: any) {
             console.warn("Error transmitting voice note:", cause);
+            toast.error("Could not send that voice note. Check your connection and try again.");
           }
         }
       };
 
       mediaRecorderRef.current = recorder;
-      recorder.start(250);
+      recorder.start(1000);
       setIsRecording(true);
       setRecordingSeconds(0);
 
       recordingTimerRef.current = window.setInterval(() => {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
-    } catch {
-      console.warn("Microphone access denied or error");
+    } catch (cause) {
+      stream?.getTracks().forEach((track) => track.stop());
+      console.warn("Microphone access denied or error:", cause);
+      toast.error("Allow microphone access to record a voice note.");
     }
   }
 
@@ -1008,6 +1032,12 @@ export default function Home() {
 
   async function consumeMediaOnce(mediaId: string) {
     if (!session || consumedMediaIds.has(mediaId)) return;
+    const item = room?.media.find((media) => media.id === mediaId);
+    if (!item || item.memberId === session.memberId) return;
+
+    // Hide it locally immediately; a transient signaling/network failure must
+    // not leave the recipient an easy replay button in this session.
+    setConsumedMediaIds((previous) => new Set(previous).add(mediaId));
     try {
       await consumeMedia.mutateAsync({
         roomId: session.roomId,
@@ -1015,9 +1045,8 @@ export default function Home() {
         memberId: session.memberId,
         mediaId,
       });
-      setConsumedMediaIds((prev) => new Set(prev).add(mediaId));
     } catch {
-      /* ignore */
+      /* Keep the optimistic local redaction; the server remains authoritative. */
     }
   }
 
@@ -1513,7 +1542,7 @@ export default function Home() {
                             onClick={() => openViewOncePhoto(item)}
                             className="flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs shadow-xs transition-colors"
                           >
-                            <Eye className="w-4 h-4" /> View photo (once)
+                            <Eye className="w-4 h-4" /> {isOwn ? "View your photo" : "View photo (once)"}
                           </button>
                         )
                       ) : (
@@ -1528,7 +1557,7 @@ export default function Home() {
                             onClick={() => openViewOnceVideo(item)}
                             className="flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs shadow-xs transition-colors"
                           >
-                            <Video className="w-4 h-4" /> Watch video (once)
+                            <Video className="w-4 h-4" /> {isOwn ? "Watch your video" : "Watch video (once)"}
                           </button>
                         )
                       )}
@@ -1611,7 +1640,7 @@ export default function Home() {
               <span className="flex items-center gap-1.5 font-medium pl-1 truncate">
                 <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse shrink-0" />
                 <span className="truncate">
-                  Recording{isVoiceViewOnce ? " view-once" : ""}... ({String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:{String(recordingSeconds % 60).padStart(2, "0")})
+                  Recording view-once voice note... ({String(Math.floor(recordingSeconds / 60)).padStart(2, "0")}:{String(recordingSeconds % 60).padStart(2, "0")})
                 </span>
               </span>
               <div className="flex gap-1.5 shrink-0">
@@ -1702,27 +1731,10 @@ export default function Home() {
               <button
                 type="button"
                 disabled={!connected || !isOnline}
-                onClick={() => setIsVoiceViewOnce((current) => !current)}
-                className={`flex h-10 w-auto min-w-9 shrink-0 items-center justify-center gap-1 rounded-xl px-1.5 transition-colors disabled:opacity-40 sm:w-10 ${
-                  isVoiceViewOnce
-                    ? "bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:hover:bg-amber-900/60"
-                    : "text-zinc-500 hover:bg-zinc-100 hover:text-blue-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400"
-                }`}
-                title={isVoiceViewOnce ? "Next voice note will play once; tap for replayable" : "Voice notes replay by default; tap for view-once"}
-                aria-label={isVoiceViewOnce ? "Voice notes are view-once; switch to replayable" : "Voice notes are replayable; switch to view-once"}
-                aria-pressed={isVoiceViewOnce}
-              >
-                {isVoiceViewOnce ? <EyeOff className="h-4 w-4 sm:h-5 sm:w-5" /> : <Eye className="h-4 w-4 sm:h-5 sm:w-5" />}
-                {isVoiceViewOnce && <span className="text-[10px] font-semibold">Once</span>}
-              </button>
-
-              <button
-                type="button"
-                disabled={!connected || !isOnline}
                 onClick={startRecording}
                 className="flex h-10 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-blue-600 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-blue-400 sm:w-10"
-                title={isVoiceViewOnce ? "Record a view-once voice note" : "Record a replayable voice note"}
-                aria-label={isVoiceViewOnce ? "Record a view-once voice note" : "Record a replayable voice note"}
+                title="Record a voice note that recipients can play once"
+                aria-label="Record a view-once voice note"
               >
                 <Mic className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
@@ -1888,8 +1900,11 @@ export default function Home() {
             onHangup={hangupCall}
             onToggleMic={toggleMic}
             onToggleCam={toggleCam}
+            onSwitchToVideo={() => void switchToVideo()}
             isMicMuted={isMicMuted}
             isCamOff={isCamOff}
+            hasLocalVideo={Boolean(localStream?.getVideoTracks().some((track) => track.readyState === "live"))}
+            isSwitchingToVideo={isSwitchingToVideo}
           />
         )}
 

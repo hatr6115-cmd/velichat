@@ -16,8 +16,11 @@ interface CallModalProps {
   onHangup: () => void;
   onToggleMic: () => void;
   onToggleCam: () => void;
+  onSwitchToVideo: () => void;
   isMicMuted: boolean;
   isCamOff: boolean;
+  hasLocalVideo: boolean;
+  isSwitchingToVideo: boolean;
 }
 
 function RemoteTile({ item, kind }: { item: RemoteStream; kind: "audio" | "video" }) {
@@ -70,15 +73,16 @@ function RemoteTile({ item, kind }: { item: RemoteStream; kind: "audio" | "video
 
 export const CallModal: React.FC<CallModalProps> = ({
   kind, partnerAlias = "Participant", isInitiator, localStream, remoteStreams, callError, callStatus,
-  onAccept, onReject, onHangup, onToggleMic, onToggleCam, isMicMuted, isCamOff,
+  onAccept, onReject, onHangup, onToggleMic, onToggleCam, onSwitchToVideo,
+  isMicMuted, isCamOff, hasLocalVideo, isSwitchingToVideo,
 }) => {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const [callDuration, setCallDuration] = useState(0);
   useEffect(() => {
-    if (!localVideoRef.current || !localStream) return;
+    if (!localVideoRef.current || !localStream || !hasLocalVideo || kind !== "video") return;
     localVideoRef.current.srcObject = localStream;
     void localVideoRef.current.play().catch(() => undefined);
-  }, [localStream, isCamOff]);
+  }, [hasLocalVideo, isCamOff, kind, localStream]);
   useEffect(() => {
     if (callStatus !== "connected") { setCallDuration(0); return; }
     const timer = window.setInterval(() => setCallDuration((value) => value + 1), 1000);
@@ -92,7 +96,7 @@ export const CallModal: React.FC<CallModalProps> = ({
           <div className="min-w-0">
             <span className="block text-sm font-semibold text-zinc-900 dark:text-zinc-100">{kind === "video" ? "Video call" : "Voice call"}</span>
             <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">
-              {callStatus === "ringing" ? `${partnerAlias} is calling` : callStatus === "connected" ? "Connected" : "Connecting…"}
+              {isSwitchingToVideo ? "Adding video…" : callStatus === "ringing" ? `${partnerAlias} is calling` : callStatus === "connected" ? "Connected" : "Connecting…"}
             </span>
           </div>
           {callStatus === "connected" && <span className="ml-3 font-mono text-xs text-zinc-500 dark:text-zinc-400">{duration}</span>}
@@ -104,7 +108,7 @@ export const CallModal: React.FC<CallModalProps> = ({
               {callError && <span className="max-w-sm rounded-xl border border-red-400/30 bg-red-950/40 px-3 py-2 text-xs text-red-200">{callError}</span>}
             </div>
           )}
-          {kind === "video" && localStream && !isCamOff && (
+          {kind === "video" && hasLocalVideo && localStream && !isCamOff && (
             <video ref={localVideoRef} autoPlay playsInline muted className="absolute right-4 top-4 z-10 h-32 w-24 rounded-xl border border-white/30 object-cover sm:h-44 sm:w-32" />
           )}
         </div>
@@ -116,8 +120,34 @@ export const CallModal: React.FC<CallModalProps> = ({
             </>
           ) : (
             <>
-              <button type="button" onClick={onToggleMic} className="rounded-full border p-3 dark:border-zinc-700">{isMicMuted ? <MicOff size={18} /> : <Mic size={18} />}</button>
-              {kind === "video" && <button type="button" onClick={onToggleCam} className="rounded-full border p-3 dark:border-zinc-700">{isCamOff ? <VideoOff size={18} /> : <Video size={18} />}</button>}
+              <button type="button" onClick={onToggleMic} className="rounded-full border p-3 dark:border-zinc-700" aria-label={isMicMuted ? "Unmute microphone" : "Mute microphone"} title={isMicMuted ? "Unmute microphone" : "Mute microphone"}>{isMicMuted ? <MicOff size={18} /> : <Mic size={18} />}</button>
+              {kind === "audio" && callStatus === "connected" && (
+                <button
+                  type="button"
+                  onClick={onSwitchToVideo}
+                  disabled={isSwitchingToVideo}
+                  className="flex items-center gap-2 rounded-full border px-4 py-3 text-xs font-medium disabled:cursor-wait disabled:opacity-60 dark:border-zinc-700"
+                  aria-label={isSwitchingToVideo ? "Adding video to call" : "Switch to video call"}
+                  title={isSwitchingToVideo ? "Adding camera to this call" : "Add your camera to this call"}
+                >
+                  <Video size={18} />
+                  <span>{isSwitchingToVideo ? "Adding video…" : "Add video"}</span>
+                </button>
+              )}
+              {kind === "video" && hasLocalVideo && <button type="button" onClick={onToggleCam} className="rounded-full border p-3 dark:border-zinc-700" aria-label={isCamOff ? "Turn camera on" : "Turn camera off"} title={isCamOff ? "Turn camera on" : "Turn camera off"}>{isCamOff ? <VideoOff size={18} /> : <Video size={18} />}</button>}
+              {kind === "video" && !hasLocalVideo && callStatus === "connected" && (
+                <button
+                  type="button"
+                  onClick={onSwitchToVideo}
+                  disabled={isSwitchingToVideo}
+                  className="flex items-center gap-2 rounded-full border px-4 py-3 text-xs font-medium disabled:cursor-wait disabled:opacity-60 dark:border-zinc-700"
+                  aria-label={isSwitchingToVideo ? "Adding your camera" : "Add your camera to the call"}
+                  title="Add your camera to the call"
+                >
+                  <Video size={18} />
+                  <span>{isSwitchingToVideo ? "Adding video…" : "Add camera"}</span>
+                </button>
+              )}
               <button type="button" onClick={onHangup} className="flex items-center gap-2 rounded-full bg-red-600 px-5 py-2 text-xs font-semibold text-white"><PhoneOff size={16} /> End call</button>
             </>
           )}
