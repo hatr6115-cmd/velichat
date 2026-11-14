@@ -15,7 +15,9 @@ export type ActiveCall = {
   startedAt: number;
   participants: string[];
   offer?: string;
+  offererId?: string;
   answer?: string;
+  answererId?: string;
 };
 
 import { nanoid } from "nanoid";
@@ -52,8 +54,8 @@ type TemporaryMedia = {
   memberId: string;
   alias: TemporaryAlias;
   kind: "voice" | "photo" | "video" | "document";
-  // Voice notes are replayable by default. Only an explicit opt-in makes a
-  // voice note consumable once; photos and videos remain view-once by kind.
+  // Voice notes are view-once for recipients. The sender always retains access
+  // to their own copy; photos and videos follow the same recipient-only rule.
   viewOnce?: boolean;
   fileName?: string;
   mimeType?: string;
@@ -264,7 +266,12 @@ function snapshot(room: Room, currentMemberId: string): RoomSnapshot {
     typingAlias: typingAliases[0],
     typingAliases: Array.from(new Set(typingAliases)),
     messages: room.messages.map(m => ({ ...m, deliveredTo: [...m.deliveredTo], readBy: [...m.readBy] })),
-    media: room.media.map((item) => ({ ...item, consumedBy: [...item.consumedBy], dataUrl: item.consumedBy.includes(currentMemberId) ? undefined : item.dataUrl })),
+    media: room.media.map((item) => ({
+      ...item,
+      consumedBy: [...item.consumedBy],
+      // Consumption is per recipient; never revoke the sender's retained copy.
+      dataUrl: item.memberId !== currentMemberId && item.consumedBy.includes(currentMemberId) ? undefined : item.dataUrl,
+    })),
     screenshotShortcutNotices: room.screenshotShortcutNotices.map((notice) => ({ ...notice })),
     call: room.call
       ? (room.call.targetId && room.call.targetId !== currentMemberId && room.call.initiatorId !== currentMemberId)
@@ -524,7 +531,8 @@ export function sendTemporaryMedia(
   dataUrlInput: string,
   fileName?: string,
   mimeType?: string,
-  viewOnce = false,
+  // Accepted for old clients, but no recipient can opt out of view-once.
+  _viewOnce?: boolean,
 ) {
   const room = requireRoom(roomId, inviteToken);
   const member = getParticipant(room, memberId);
@@ -535,7 +543,7 @@ export function sendTemporaryMedia(
     memberId,
     alias: member.alias,
     kind,
-    ...(kind === "voice" ? { viewOnce } : {}),
+    ...(kind === "voice" ? { viewOnce: true } : {}),
     ...(kind === "document" ? { fileName: safeFileName, mimeType: mimeType || dataUrl.slice(5, dataUrl.indexOf(";")) } : {}),
     dataUrl,
     sentAt: nextContentTimestamp(room),
@@ -552,23 +560,13 @@ export function consumeTemporaryMedia(roomId: string, inviteToken: string, membe
   const item = room.media.find((media) => media.id === mediaId);
   if (!item) throw new Error("This media is no longer available.");
   if (item.kind === "document") throw new Error("Documents remain available until the room is closed.");
-  if (item.kind === "voice" && !item.viewOnce) {
-    throw new Error("Replayable voice notes do not expire.");
-  }
   if (item.memberId === memberId) throw new Error("Only the recipient can consume this media.");
   if (item.consumedBy.includes(memberId)) throw new Error("This media is no longer available.");
   
   item.consumedBy.push(memberId);
   
-  // The host's items are consumed by every guest; a guest's item is consumed by
-  // the host and every other guest. In both cases the count is room.guests.length.
-  // Keep an explicit view-once voice note for its sender's own replayable copy;
-  // recipient snapshots still hide it after that recipient consumes it.
-  const expectedConsumersCount = room.guests.length;
-  if (item.kind !== "voice" && item.consumedBy.length >= expectedConsumersCount) {
-    item.dataUrl = undefined;
-  }
-  
+  // Keep the server-side payload for the sender's copy. Each recipient's
+  // snapshot omits it as soon as that recipient consumes the media.
   const snap = snapshot(room, memberId);
   notifyRoomSubscribers(roomId);
   return snap;
@@ -673,6 +671,7 @@ export function startTemporaryCall(
     startedAt: Date.now(),
     participants: [memberId],
     offer,
+    ...(offer ? { offererId: memberId } : {}),
   };
   room.signals = [];
   const snap = snapshot(room, memberId);
@@ -733,27 +732,43 @@ export function sendTemporaryCallSignal(
   } else if (remoteParticipants.length !== 1 || receiverId !== remoteParticipants[0]) {
     throw new Error("The call signal recipient is not a participant in this call.");
   }
-  if (type === "offer" && room.call.initiatorId !== memberId) {
-    throw new Error("Only the caller can send the initial call offer.");
-  }
-  if (type === "answer" && room.call.initiatorId === memberId) {
-    throw new Error("Only the other participant can answer the call offer.");
-  }
   if (!room.signals) room.signals = [];
 
-  // Anchor offer & answer directly on call object so they are never lost or pruned
-  if (type === 'offer') {
+  // Anchor the current negotiation in the call snapshot so it can be recovered
+  // after a transient stream/SSE interruption. Either peer may offer during
+  // renegotiation (for example, when adding a camera to an audio call).
+  if (type === "offer") {
     room.call.offer = payload;
+    room.call.offererId = memberId;
+    room.call.answer = undefined;
+    room.call.answererId = undefined;
   }
-  if (type === 'answer') {
+  if (type === "answer") {
     room.call.answer = payload;
+    room.call.answererId = memberId;
+    try {
+      const description = JSON.parse(payload) as { sdp?: unknown };
+      const hasActiveVideo = typeof description.sdp === "string" && description.sdp
+        .split(/\r?\n/)
+        .some((line) => {
+          if (!line.startsWith("m=video ")) return false;
+          const port = Number(line.split(/\s+/, 2)[1]?.split("/")[0]);
+          return Number.isFinite(port) && port > 0;
+        });
+      if (hasActiveVideo) room.call.kind = "video";
+    } catch {
+      // Signaling payloads are validated by the WebRTC peers; ignore malformed SDP here.
+    }
   }
 
-  // Prevent memory unbounded growth while keeping non-ice signals intact
+  // Bound the per-call signal history while retaining recent negotiations and
+  // candidates. The current offer and answer also remain anchored on room.call.
   if (room.signals.length > 200) {
-    const nonIce = room.signals.filter((s) => s.type !== 'ice');
-    const ice = room.signals.filter((s) => s.type === 'ice').slice(-100);
-    room.signals = [...nonIce, ...ice];
+    const retained = new Set([
+      ...room.signals.filter((signal) => signal.type !== "ice").slice(-100),
+      ...room.signals.filter((signal) => signal.type === "ice").slice(-100),
+    ].map((signal) => signal.id));
+    room.signals = room.signals.filter((signal) => retained.has(signal.id));
   }
 
   room.signals.push({

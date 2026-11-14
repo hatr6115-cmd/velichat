@@ -78,8 +78,12 @@
 
 - [x] Add in-memory voice-note, photo, and video items with size and MIME validation
 - [x] Add voice-note recording and sending controls
-- [x] Keep ordinary voice notes replayable for senders and recipients; add a separate opt-in view-once voice mode
+- [x] Improve voice-note capture with speech-focused mono 48 kHz input and a higher Opus recording bitrate
+- [x] Make photos, videos, and voice notes view-once for recipients by default while keeping the sender's copy replayable
 - [x] Add view-once photo and video selection/sending controls
+- [x] Allow an active audio call to add video through WebRTC renegotiation
+- [x] Attempt ICE restart after a sustained disconnect or failed ICE connection
+- [ ] Verify call setup and audio/video upgrades on real devices and restrictive networks with production TURN credentials
 - [x] Allow recipients to open view-once photos and videos once, then consume the media payload
 - [x] Remove elapsed-time view-once countdowns; close media when dismissed, backgrounded, or playback ends
 - [x] Redact consumed view-once media per recipient and clear room media on teardown

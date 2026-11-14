@@ -12,3 +12,11 @@ services:
         value: 22.12.0
       - key: PORT
         value: 3000
+      # Configure these with credentials from a production TURN provider for
+      # calls on restrictive NATs; otherwise the server uses its fallback relay.
+      - key: TURN_URLS
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false

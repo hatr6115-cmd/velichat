@@ -8,6 +8,23 @@ type CallStatus = "calling" | "ringing" | "connected" | "ended";
 
 type RemoteEntry = { memberId: string; stream: MediaStream };
 
+function descriptionHasVideo(payload: unknown) {
+  if (!payload || typeof payload !== "object") return false;
+  const sdp = (payload as RTCSessionDescriptionInit).sdp;
+  if (typeof sdp !== "string") return false;
+  return sdp.split(/\r?\n/).some((line) => {
+    if (!line.startsWith("m=video ")) return false;
+    const port = Number(line.split(/\s+/, 2)[1]?.split("/")[0]);
+    return Number.isFinite(port) && port > 0;
+  });
+}
+
+function candidateMatchesRemoteIce(pc: RTCPeerConnection, candidate: RTCIceCandidateInit) {
+  if (!pc.remoteDescription || !candidate.usernameFragment) return Boolean(pc.remoteDescription);
+  const remoteUfrags = Array.from(pc.remoteDescription.sdp?.matchAll(/^a=ice-ufrag:([^\r\n]+)/gm) || [], (match) => match[1]);
+  return remoteUfrags.includes(candidate.usernameFragment);
+}
+
 const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun.cloudflare.com:3478" },
@@ -32,6 +49,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const [remoteStreams, setRemoteStreams] = useState<RemoteEntry[]>([]);
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isCamOff, setIsCamOff] = useState(false);
+  const [isSwitchingToVideo, setIsSwitchingToVideo] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
 
   const localRef = useRef<MediaStream | null>(null);
@@ -45,6 +63,11 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const creatingRef = useRef(new Set<string>());
   const processedSignalsRef = useRef(new Set<string>());
   const signalingQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const disconnectTimersRef = useRef(new Map<string, number>());
+  const restartTimersRef = useRef(new Map<string, number>());
+  const restartingIceRef = useRef(new Set<string>());
+  const videoUpgradeTimerRef = useRef<number | undefined>(undefined);
+  const videoUpgradeInProgressRef = useRef(false);
   const acceptedRef = useRef(false);
   const hadActiveCallRef = useRef(false);
   const endedCallKeyRef = useRef<string | null>(null);
@@ -99,6 +122,13 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     const connectingTimer = connectingTimersRef.current.get(memberId);
     if (connectingTimer !== undefined) window.clearTimeout(connectingTimer);
     connectingTimersRef.current.delete(memberId);
+    const disconnectTimer = disconnectTimersRef.current.get(memberId);
+    if (disconnectTimer !== undefined) window.clearTimeout(disconnectTimer);
+    disconnectTimersRef.current.delete(memberId);
+    const restartTimer = restartTimersRef.current.get(memberId);
+    if (restartTimer !== undefined) window.clearTimeout(restartTimer);
+    restartTimersRef.current.delete(memberId);
+    restartingIceRef.current.delete(memberId);
     receivedRemoteTracksRef.current.delete(memberId);
     const pc = peersRef.current.get(memberId);
     if (pc) {
@@ -116,11 +146,15 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
   const cleanup = useCallback(() => {
     if (missingCallTimerRef.current !== undefined) window.clearTimeout(missingCallTimerRef.current);
     missingCallTimerRef.current = undefined;
+    if (videoUpgradeTimerRef.current !== undefined) window.clearTimeout(videoUpgradeTimerRef.current);
+    videoUpgradeTimerRef.current = undefined;
+    videoUpgradeInProgressRef.current = false;
     hadActiveCallRef.current = false;
     peersRef.current.forEach((_, memberId) => closePeer(memberId));
     peersRef.current.clear();
     pendingIceRef.current.clear();
     creatingRef.current.clear();
+    restartingIceRef.current.clear();
     processedSignalsRef.current.clear();
     acceptedRef.current = false;
     localRef.current?.getTracks().forEach((track) => track.stop());
@@ -131,6 +165,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     setIsInitiator(false);
     setIsMicMuted(false);
     setIsCamOff(false);
+    setIsSwitchingToVideo(false);
     setCallError(null);
     setCallStatus("ended");
   }, [closePeer]);
@@ -174,6 +209,22 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     return stream;
   }, []);
 
+  const getCameraStream = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera access is unavailable");
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: { ideal: "user" },
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
+        frameRate: { ideal: 30, max: 30 },
+        aspectRatio: { ideal: 16 / 9 },
+      },
+    });
+    stream.getVideoTracks().forEach((track) => { track.contentHint = "motion"; });
+    return stream;
+  }, []);
+
   const configureSenderQuality = useCallback(async (sender: RTCRtpSender, kind: string) => {
     try {
       const parameters = sender.getParameters();
@@ -207,6 +258,64 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     }
   }, [configureSenderQuality]);
 
+  const restartIce = useCallback(async (remoteId: string, pc: RTCPeerConnection) => {
+    const callKey = roomCallKeyRef.current;
+    if (
+      !session ||
+      !callKey ||
+      peersRef.current.get(remoteId) !== pc ||
+      pc.connectionState === "closed" ||
+      restartingIceRef.current.has(remoteId)
+    ) return;
+
+    restartingIceRef.current.add(remoteId);
+    const operation = signalingQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (
+          roomCallKeyRef.current !== callKey ||
+          peersRef.current.get(remoteId) !== pc ||
+          pc.connectionState === "closed" ||
+          pc.signalingState !== "stable"
+        ) {
+          restartingIceRef.current.delete(remoteId);
+          return;
+        }
+
+        setCallError("Connection interrupted. Trying to reconnect…");
+        const offer = await pc.createOffer({ iceRestart: true });
+        if (peersRef.current.get(remoteId) !== pc || pc.signalingState !== "stable") {
+          restartingIceRef.current.delete(remoteId);
+          return;
+        }
+        await pc.setLocalDescription(offer);
+        await send(remoteId, "offer", offer);
+        const existingTimer = restartTimersRef.current.get(remoteId);
+        if (existingTimer !== undefined) window.clearTimeout(existingTimer);
+        const timer = window.setTimeout(() => {
+          restartTimersRef.current.delete(remoteId);
+          restartingIceRef.current.delete(remoteId);
+          if (
+            peersRef.current.get(remoteId) === pc &&
+            pc.iceConnectionState !== "connected" &&
+            pc.iceConnectionState !== "completed"
+          ) {
+            setCallError("Automatic reconnection did not complete. Check your network or start a new call.");
+          }
+        }, 15_000);
+        restartTimersRef.current.set(remoteId, timer);
+      });
+    signalingQueueRef.current = operation.catch(() => undefined);
+    try {
+      await operation;
+    } catch (error) {
+      restartingIceRef.current.delete(remoteId);
+      if (roomCallKeyRef.current === callKey && peersRef.current.get(remoteId) === pc) {
+        setCallError(error instanceof Error ? error.message : "Could not restart the call connection.");
+      }
+    }
+  }, [send, session]);
+
   const createPeer = useCallback(async (remoteId: string, offerer: boolean) => {
     const callKey = roomCallKeyRef.current;
     if (!session || !callKey || !localRef.current || peersRef.current.has(remoteId) || creatingRef.current.has(remoteId)) return;
@@ -228,6 +337,11 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       const timer = connectingTimersRef.current.get(remoteId);
       if (timer !== undefined) window.clearTimeout(timer);
       connectingTimersRef.current.delete(remoteId);
+    };
+    const clearDisconnectTimer = () => {
+      const timer = disconnectTimersRef.current.get(remoteId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      disconnectTimersRef.current.delete(remoteId);
     };
     connectingTimersRef.current.set(remoteId, window.setTimeout(() => {
       const current = peersRef.current.get(remoteId);
@@ -262,22 +376,33 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     };
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        clearDisconnectTimer();
+        const restartTimer = restartTimersRef.current.get(remoteId);
+        if (restartTimer !== undefined) window.clearTimeout(restartTimer);
+        restartTimersRef.current.delete(remoteId);
+        restartingIceRef.current.delete(remoteId);
         setCallStatus("connected");
         setCallError(null);
-      }
-      if (pc.iceConnectionState === "failed") {
-        setCallError("The call could not establish a network connection. Please try again.");
-        closePeer(remoteId);
+      } else if (pc.iceConnectionState === "disconnected") {
+        if (!disconnectTimersRef.current.has(remoteId)) {
+          const timer = window.setTimeout(() => {
+            disconnectTimersRef.current.delete(remoteId);
+            if (pc.iceConnectionState === "disconnected") void restartIce(remoteId, pc);
+          }, 5_000);
+          disconnectTimersRef.current.set(remoteId, timer);
+        }
+      } else if (pc.iceConnectionState === "failed") {
+        clearDisconnectTimer();
+        void restartIce(remoteId, pc);
       }
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "connected") {
+        clearDisconnectTimer();
         setCallStatus("connected");
         setCallError(null);
-      }
-      if (pc.connectionState === "failed") {
-        setCallError("The call connection failed. Check your network and try again.");
-        closePeer(remoteId);
+      } else if (pc.connectionState === "failed") {
+        void restartIce(remoteId, pc);
       } else if (pc.connectionState === "closed") {
         closePeer(remoteId);
       }
@@ -300,7 +425,7 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     } finally {
       creatingRef.current.delete(remoteId);
     }
-  }, [attachLocalTracks, closePeer, loadIceServers, send, session]);
+  }, [attachLocalTracks, closePeer, loadIceServers, restartIce, send, session]);
 
   const flushIce = useCallback(async (memberId: string, pc: RTCPeerConnection) => {
     const queued = pendingIceRef.current.get(memberId) || [];
@@ -350,6 +475,99 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     }
   }, [cleanup, getMedia, isInCall, loadIceServers, room, session, startCall]);
 
+  const switchToVideo = useCallback(async () => {
+    if (
+      !session ||
+      !room?.call ||
+      !isInCall ||
+      videoUpgradeInProgressRef.current ||
+      callStatus !== "connected"
+    ) return;
+
+    const callKey = `${room.call.initiatorId}:${room.call.startedAt}`;
+    const remoteId = room.call.participants.find((id) => id !== session.memberId);
+    const currentStream = localRef.current;
+    const pc = remoteId ? peersRef.current.get(remoteId) : undefined;
+    if (!remoteId || !currentStream || !pc) {
+      setCallError("The active call stream is not ready for a video upgrade.");
+      return;
+    }
+    if (currentStream.getVideoTracks().some((track) => track.readyState === "live")) return;
+
+    videoUpgradeInProgressRef.current = true;
+    setIsSwitchingToVideo(true);
+    setCallError(null);
+    let cameraStream: MediaStream | null = null;
+    let videoTrack: MediaStreamTrack | undefined;
+    let localOfferSet = false;
+    const upgradedStream = new MediaStream();
+
+    try {
+      cameraStream = await getCameraStream();
+      videoTrack = cameraStream.getVideoTracks()[0];
+      if (!videoTrack) throw new Error("No camera video track is available.");
+      for (const track of [...currentStream.getTracks(), videoTrack]) upgradedStream.addTrack(track);
+
+      const operation = signalingQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (
+            roomCallKeyRef.current !== callKey ||
+            peersRef.current.get(remoteId) !== pc ||
+            pc.connectionState === "closed"
+          ) throw new Error("The call ended before video could be added.");
+          if (pc.signalingState !== "stable") throw new Error("The call is still negotiating. Try adding video again in a moment.");
+
+          await attachLocalTracks(pc, upgradedStream);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          localOfferSet = true;
+          await send(remoteId, "offer", offer);
+          if (
+            roomCallKeyRef.current !== callKey ||
+            peersRef.current.get(remoteId) !== pc
+          ) throw new Error("The call ended before video could be added.");
+          localRef.current = upgradedStream;
+          setLocalStream(upgradedStream);
+          setCallKind("video");
+        });
+      signalingQueueRef.current = operation.catch((error) => {
+        console.error("Failed to add video to the call:", error);
+      });
+      await operation;
+
+      if (videoUpgradeTimerRef.current !== undefined) window.clearTimeout(videoUpgradeTimerRef.current);
+      videoUpgradeTimerRef.current = window.setTimeout(() => {
+        videoUpgradeTimerRef.current = undefined;
+        videoUpgradeInProgressRef.current = false;
+        setIsSwitchingToVideo(false);
+        setCallError("Video has not been confirmed by the other participant yet. Your audio call may still be active.");
+      }, 25_000);
+    } catch (error) {
+      const failedVideoTrack = videoTrack;
+      const callStillActive =
+        roomCallKeyRef.current === callKey &&
+        peersRef.current.get(remoteId) === pc &&
+        pc.connectionState !== "closed";
+      if (failedVideoTrack && (!localOfferSet || !callStillActive)) {
+        if (!localOfferSet && pc.connectionState !== "closed") {
+          const sender = pc.getSenders().find((item) => item.track?.id === failedVideoTrack.id);
+          if (sender) pc.removeTrack(sender);
+        }
+        failedVideoTrack.stop();
+      } else if (localOfferSet && callStillActive) {
+        // Keep the offered track alive if signaling failed after local SDP was
+        // installed; the remote peer may still receive and answer that offer.
+        localRef.current = upgradedStream;
+        setLocalStream(upgradedStream);
+        setCallKind("video");
+      }
+      videoUpgradeInProgressRef.current = false;
+      setIsSwitchingToVideo(false);
+      setCallError(error instanceof Error ? error.message : "Could not add video to this call.");
+    }
+  }, [attachLocalTracks, callStatus, getCameraStream, isInCall, room, send, session]);
+
   const hangup = useCallback(async () => {
     if (session) {
       await send("all", "end", {}).catch(() => undefined);
@@ -374,15 +592,15 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
         endedCallKeyRef.current = null;
         hadActiveCallRef.current = true;
         if (room.call.kind !== callKind && !isInCall) setCallKind(room.call.kind);
+        if (room.call.kind === "video") setCallKind("video");
         if (room.call.initiatorId !== session.memberId && !isInCall) {
           setCallStatus("ringing");
           setIsInCall(true);
         }
         if (isInCall && localRef.current) {
           for (const remoteId of room.call.participants.filter((id) => id !== session.memberId)) {
-            // The actual caller owns offer creation. The receiver creates its
-            // peer only after receiving that offer, which prevents offer glare
-            // and ensures the caller's audio/video tracks are in the offer.
+            // The caller creates the initial offer. Later offers can come from
+            // either peer for camera upgrades or ICE restarts.
             if (room.call.initiatorId === session.memberId) {
               void createPeer(remoteId, true).catch((error) => {
                 console.error("Failed to create the WebRTC connection:", error);
@@ -425,10 +643,28 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
           await createPeer(signal.senderId, false);
           const pc = peersRef.current.get(signal.senderId);
           if (!pc) continue;
-          if (pc.remoteDescription) {
+          if (pc.remoteDescription?.sdp === payload.sdp) {
             processedSignalsRef.current.add(signal.id);
             continue;
           }
+
+          // Use the standard polite/impolite offer-collision rule. It allows
+          // either caller to add video or restart ICE without simultaneous
+          // offers leaving both RTCPeerConnections stuck in have-local-offer.
+          const offerCollision = pc.signalingState !== "stable";
+          const polite = room.call?.initiatorId !== session.memberId;
+          if (offerCollision && !polite) {
+            processedSignalsRef.current.add(signal.id);
+            continue;
+          }
+          if (offerCollision && polite) {
+            try {
+              await pc.setLocalDescription({ type: "rollback" });
+            } catch {
+              // Some WebViews perform rollback implicitly when applying a remote offer.
+            }
+          }
+
           await pc.setRemoteDescription(new RTCSessionDescription(payload));
           const stream = localRef.current;
           if (stream) await attachLocalTracks(pc, stream);
@@ -436,17 +672,51 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           await send(signal.senderId, "answer", answer);
+          if (descriptionHasVideo(payload)) {
+            setCallKind("video");
+            videoUpgradeInProgressRef.current = false;
+            if (videoUpgradeTimerRef.current !== undefined) window.clearTimeout(videoUpgradeTimerRef.current);
+            videoUpgradeTimerRef.current = undefined;
+            setIsSwitchingToVideo(false);
+          } else if (
+            localRef.current?.getVideoTracks().some((track) => track.readyState === "live") &&
+            pc.signalingState === "stable"
+          ) {
+            // A polite rollback may have chosen an audio-only offer over our
+            // pending camera offer. Re-offer the retained camera track now.
+            const videoOffer = await pc.createOffer();
+            await pc.setLocalDescription(videoOffer);
+            await send(signal.senderId, "offer", videoOffer);
+          }
+          restartingIceRef.current.delete(signal.senderId);
+          const restartTimer = restartTimersRef.current.get(signal.senderId);
+          if (restartTimer !== undefined) window.clearTimeout(restartTimer);
+          restartTimersRef.current.delete(signal.senderId);
         } else if (signal.type === "answer") {
           const pc = peersRef.current.get(signal.senderId);
           if (!pc) continue;
-          if (!pc.remoteDescription) {
+          if (pc.signalingState === "have-local-offer") {
             await pc.setRemoteDescription(new RTCSessionDescription(payload));
             await flushIce(signal.senderId, pc);
+            restartingIceRef.current.delete(signal.senderId);
+            const restartTimer = restartTimersRef.current.get(signal.senderId);
+            if (restartTimer !== undefined) window.clearTimeout(restartTimer);
+            restartTimersRef.current.delete(signal.senderId);
+            if (descriptionHasVideo(payload)) {
+              setCallKind("video");
+              videoUpgradeInProgressRef.current = false;
+              if (videoUpgradeTimerRef.current !== undefined) window.clearTimeout(videoUpgradeTimerRef.current);
+              videoUpgradeTimerRef.current = undefined;
+              setIsSwitchingToVideo(false);
+            }
           }
         } else if (signal.type === "ice") {
           const pc = peersRef.current.get(signal.senderId);
-          if (pc?.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(payload)).catch(() => undefined);
-          else pendingIceRef.current.set(signal.senderId, [...(pendingIceRef.current.get(signal.senderId) || []), payload]);
+          if (pc && candidateMatchesRemoteIce(pc, payload)) {
+            await pc.addIceCandidate(new RTCIceCandidate(payload)).catch(() => undefined);
+          } else {
+            pendingIceRef.current.set(signal.senderId, [...(pendingIceRef.current.get(signal.senderId) || []), payload]);
+          }
         }
         processedSignalsRef.current.add(signal.id);
       }
@@ -456,24 +726,67 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
       // hang up and redial.
       if (localRef.current && room.call) {
         const remoteId = room.call.participants.find((id) => id !== session.memberId);
-        if (remoteId && room.call.initiatorId !== session.memberId && room.call.offer) {
+        const offererId = room.call.offererId || room.call.initiatorId;
+        if (remoteId && room.call.offer && offererId !== session.memberId) {
           await createPeer(remoteId, false);
           const pc = peersRef.current.get(remoteId);
-          if (pc && !pc.remoteDescription) {
-            await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(room.call.offer)));
-            const stream = localRef.current;
-            await attachLocalTracks(pc, stream);
-            await flushIce(remoteId, pc);
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            await send(remoteId, "answer", answer);
+          const offer = JSON.parse(room.call.offer);
+          if (pc && pc.remoteDescription?.sdp !== offer.sdp) {
+            const offerCollision = pc.signalingState !== "stable";
+            const polite = room.call.initiatorId !== session.memberId;
+            if (!offerCollision || polite) {
+              if (offerCollision && polite) {
+                try {
+                  await pc.setLocalDescription({ type: "rollback" });
+                } catch {
+                  // Some WebViews roll back implicitly on setRemoteDescription(offer).
+                }
+              }
+              await pc.setRemoteDescription(new RTCSessionDescription(offer));
+              const stream = localRef.current;
+              if (stream) await attachLocalTracks(pc, stream);
+              await flushIce(remoteId, pc);
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              await send(remoteId, "answer", answer);
+              if (descriptionHasVideo(offer)) {
+                setCallKind("video");
+                videoUpgradeInProgressRef.current = false;
+                if (videoUpgradeTimerRef.current !== undefined) window.clearTimeout(videoUpgradeTimerRef.current);
+                videoUpgradeTimerRef.current = undefined;
+                setIsSwitchingToVideo(false);
+              } else if (
+                localRef.current?.getVideoTracks().some((track) => track.readyState === "live") &&
+                pc.signalingState === "stable"
+              ) {
+                const videoOffer = await pc.createOffer();
+                await pc.setLocalDescription(videoOffer);
+                await send(remoteId, "offer", videoOffer);
+              }
+              restartingIceRef.current.delete(remoteId);
+              const restartTimer = restartTimersRef.current.get(remoteId);
+              if (restartTimer !== undefined) window.clearTimeout(restartTimer);
+              restartTimersRef.current.delete(remoteId);
+            }
           }
         }
-        if (remoteId && room.call.initiatorId === session.memberId && room.call.answer) {
+        if (remoteId && room.call.answer && room.call.answererId !== session.memberId) {
           const pc = peersRef.current.get(remoteId);
-          if (pc && !pc.remoteDescription && pc.signalingState === "have-local-offer") {
-            await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(room.call.answer)));
+          if (pc && pc.signalingState === "have-local-offer") {
+            const answer = JSON.parse(room.call.answer);
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
             await flushIce(remoteId, pc);
+            if (descriptionHasVideo(answer)) {
+              setCallKind("video");
+              videoUpgradeInProgressRef.current = false;
+              if (videoUpgradeTimerRef.current !== undefined) window.clearTimeout(videoUpgradeTimerRef.current);
+              videoUpgradeTimerRef.current = undefined;
+              setIsSwitchingToVideo(false);
+            }
+            restartingIceRef.current.delete(remoteId);
+            const restartTimer = restartTimersRef.current.get(remoteId);
+            if (restartTimer !== undefined) window.clearTimeout(restartTimer);
+            restartTimersRef.current.delete(remoteId);
           }
         }
       }
@@ -499,7 +812,9 @@ export function useMeshCall(session: Session | null, room: RoomSnapshot | null |
     callError,
     isMicMuted,
     isCamOff,
+    isSwitchingToVideo,
     start,
+    switchToVideo,
     accept,
     reject,
     hangup,

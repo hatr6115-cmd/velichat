@@ -182,24 +182,11 @@ describe("temporary rooms", () => {
     }
   });
 
-  it("keeps ordinary voice notes replayable for sender and recipients", () => {
-    const host = createTemporaryRoom("Host");
-    const guest = joinTemporaryRoom(host.roomId, host.inviteToken, "Guest");
-    const voice = sendTemporaryMedia(host.roomId, host.inviteToken, host.currentMemberId, "voice", "data:audio/webm;base64,AAAA");
-    const voiceId = voice.media[0]!.id;
-
-    expect(voice.media[0]?.viewOnce).toBe(false);
-    expect(voice.media[0]?.dataUrl).toBe("data:audio/webm;base64,AAAA");
-    expect(getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId).media[0]?.dataUrl).toBe("data:audio/webm;base64,AAAA");
-    expect(() => consumeTemporaryMedia(host.roomId, host.inviteToken, guest.currentMemberId, voiceId)).toThrow("Replayable voice notes");
-    expect(getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId).media[0]?.dataUrl).toBe("data:audio/webm;base64,AAAA");
-    expect(getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).media[0]?.dataUrl).toBe("data:audio/webm;base64,AAAA");
-  });
-
-  it("consumes explicit view-once voice notes for recipients but retains the sender's copy", () => {
+  it("makes voice notes view-once for recipients by default and retains the sender's copy", () => {
     const host = createTemporaryRoom("Host");
     const firstGuest = joinTemporaryRoom(host.roomId, host.inviteToken, "First");
     const secondGuest = joinTemporaryRoom(host.roomId, host.inviteToken, "Second");
+    // A legacy client asking for replayable delivery cannot weaken the default.
     const voice = sendTemporaryMedia(
       host.roomId,
       host.inviteToken,
@@ -208,11 +195,13 @@ describe("temporary rooms", () => {
       "data:audio/webm;base64,AAAA",
       undefined,
       undefined,
-      true,
+      false,
     );
     const voiceId = voice.media[0]!.id;
 
     expect(voice.media[0]?.viewOnce).toBe(true);
+    expect(voice.media[0]?.dataUrl).toBe("data:audio/webm;base64,AAAA");
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, firstGuest.currentMemberId).media[0]?.dataUrl).toBe("data:audio/webm;base64,AAAA");
     expect(consumeTemporaryMedia(host.roomId, host.inviteToken, firstGuest.currentMemberId, voiceId).media[0]?.dataUrl).toBeUndefined();
     expect(getTemporaryRoom(host.roomId, host.inviteToken, firstGuest.currentMemberId).media[0]?.dataUrl).toBeUndefined();
     expect(getTemporaryRoom(host.roomId, host.inviteToken, secondGuest.currentMemberId).media[0]?.dataUrl).toBe("data:audio/webm;base64,AAAA");
@@ -221,7 +210,7 @@ describe("temporary rooms", () => {
     expect(getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).media[0]?.dataUrl).toBe("data:audio/webm;base64,AAAA");
   });
 
-  it("consumes view-once photos and videos for each recipient before clearing them", () => {
+  it("consumes view-once photos and videos per recipient while retaining the sender's copies", () => {
     const host = createTemporaryRoom("Host");
     const firstGuest = joinTemporaryRoom(host.roomId, host.inviteToken, "First");
     const secondGuest = joinTemporaryRoom(host.roomId, host.inviteToken, "Second");
@@ -231,12 +220,20 @@ describe("temporary rooms", () => {
     expect(() => consumeTemporaryMedia(host.roomId, host.inviteToken, host.currentMemberId, photo.media[0]!.id)).toThrow("Only the recipient");
     consumeTemporaryMedia(host.roomId, host.inviteToken, firstGuest.currentMemberId, photo.media[0]!.id);
     consumeTemporaryMedia(host.roomId, host.inviteToken, firstGuest.currentMemberId, video.media[1]!.id);
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, firstGuest.currentMemberId).media[0]?.dataUrl).toBeUndefined();
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, firstGuest.currentMemberId).media[1]?.dataUrl).toBeUndefined();
     expect(getTemporaryRoom(host.roomId, host.inviteToken, secondGuest.currentMemberId).media[0]?.dataUrl).toBe("data:image/png;base64,AAAA");
     expect(getTemporaryRoom(host.roomId, host.inviteToken, secondGuest.currentMemberId).media[1]?.dataUrl).toBe("data:video/mp4;base64,AAAA");
     consumeTemporaryMedia(host.roomId, host.inviteToken, secondGuest.currentMemberId, photo.media[0]!.id);
     consumeTemporaryMedia(host.roomId, host.inviteToken, secondGuest.currentMemberId, video.media[1]!.id);
-    expect(getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).media[0]?.dataUrl).toBeUndefined();
-    expect(getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).media[1]?.dataUrl).toBeUndefined();
+    const senderMedia = getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).media;
+    expect(senderMedia[0]?.dataUrl).toBe("data:image/png;base64,AAAA");
+    expect(senderMedia[1]?.dataUrl).toBe("data:video/mp4;base64,AAAA");
+
+    const guestPhoto = sendTemporaryMedia(host.roomId, host.inviteToken, firstGuest.currentMemberId, "photo", "data:image/png;base64,BBBB").media[2]!;
+    consumeTemporaryMedia(host.roomId, host.inviteToken, host.currentMemberId, guestPhoto.id);
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).media[2]?.dataUrl).toBeUndefined();
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, firstGuest.currentMemberId).media[2]?.dataUrl).toBe("data:image/png;base64,BBBB");
   });
 
   it("allows deletion of own messages and media only, and removes them for everyone", () => {
@@ -312,7 +309,7 @@ describe("temporary rooms", () => {
     }
   });
 
-  it("requires a second participant and protects call signaling roles", () => {
+  it("requires a second participant and allows renegotiation only between call peers", () => {
     const host = createTemporaryRoom("Host");
     expect(() => startTemporaryCall(host.roomId, host.inviteToken, host.currentMemberId, "audio")).toThrow("friend must join");
 
@@ -325,18 +322,26 @@ describe("temporary rooms", () => {
       host.roomId,
       host.inviteToken,
       guest.currentMemberId,
-      host.currentMemberId,
-      "offer",
-      JSON.stringify({ type: "offer", sdp: "forbidden" }),
-    )).toThrow("Only the caller");
-    expect(() => sendTemporaryCallSignal(
-      host.roomId,
-      host.inviteToken,
-      host.currentMemberId,
       "not-a-participant",
       "offer",
       JSON.stringify({ type: "offer", sdp: "forbidden" }),
     )).toThrow("recipient is not a participant");
+
+    const videoOffer = JSON.stringify({ type: "offer", sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n" });
+    sendTemporaryCallSignal(host.roomId, host.inviteToken, guest.currentMemberId, host.currentMemberId, "offer", videoOffer);
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, host.currentMemberId).call).toMatchObject({
+      kind: "audio",
+      offer: videoOffer,
+      offererId: guest.currentMemberId,
+    });
+
+    const videoAnswer = JSON.stringify({ type: "answer", sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n" });
+    sendTemporaryCallSignal(host.roomId, host.inviteToken, host.currentMemberId, guest.currentMemberId, "answer", videoAnswer);
+    expect(getTemporaryRoom(host.roomId, host.inviteToken, guest.currentMemberId).call).toMatchObject({
+      kind: "video",
+      answer: videoAnswer,
+      answererId: host.currentMemberId,
+    });
   });
 
   it("clears an active call when one of its participants leaves", () => {
